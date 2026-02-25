@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import AppException
 from app.core.security import (
@@ -15,10 +16,7 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.auth_token import AuthToken
 from app.models.user import User
-from app.schemas.auth import (
-    LoginRequest,
-    RefreshRequest,
-)
+from app.schemas.auth import LoginRequest, RefreshRequest
 from app.schemas.common import ResponseModel
 from app.schemas.user import UserResponse
 from app.config import settings
@@ -26,31 +24,52 @@ from app.config import settings
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
+async def _get_user_with_relations(db: AsyncSession, user: User) -> User:
+    """Reload user with tenants and districts for response."""
+    result = await db.execute(
+        select(User)
+        .options(
+            selectinload(User.user_tenants),
+            selectinload(User.user_districts),
+        )
+        .where(User.id == user.id)
+    )
+    return result.scalar_one()
+
+
 @router.post("/login")
 async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == payload.email))
+    # Support login with email OR username
+    result = await db.execute(
+        select(User).where(
+            (User.email == payload.email) | (User.username == payload.email)
+        )
+    )
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(payload.password, user.password_hash):
-        raise AppException(status_code=401, detail="Invalid email or password", error_code="INVALID_CREDENTIALS")
+        raise AppException(status_code=401, detail="Invalid credentials", error_code="INVALID_CREDENTIALS")
 
     if not user.is_active:
         raise AppException(status_code=403, detail="Account is inactive", error_code="ACCOUNT_INACTIVE")
 
-    token_data = {"sub": str(user.id), "tenant_id": str(user.tenant_id)}
+    # token_data no longer has tenant_id since user can have multiple tenants
+    token_data = {"sub": str(user.id), "role_id": str(user.role_id)}
     access_token = create_access_token(token_data)
     refresh_token = create_refresh_token(token_data)
 
     expires_at = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    db_token = AuthToken(user_id=user.id, refresh_token=refresh_token, expires_at=expires_at)
-    db.add(db_token)
+    db.add(AuthToken(user_id=user.id, refresh_token=refresh_token, expires_at=expires_at))
     await db.flush()
+
+    user = await _get_user_with_relations(db, user)
 
     return ResponseModel(
         data={
             "access_token": access_token,
             "refresh_token": refresh_token,
             "token_type": "bearer",
+            "user": UserResponse.model_validate(user).model_dump(),
         },
         message="Login successful",
     )
@@ -76,7 +95,11 @@ async def refresh_token(payload: RefreshRequest, db: AsyncSession = Depends(get_
     if not decoded or decoded.get("type") != "refresh":
         raise AppException(status_code=401, detail="Invalid refresh token", error_code="INVALID_REFRESH_TOKEN")
 
-    access_token = create_access_token({"sub": decoded["sub"], "tenant_id": decoded.get("tenant_id")})
+    access_token = create_access_token({
+        "sub": decoded["sub"],
+        "role_id": decoded.get("role_id"),
+    })
+
     return ResponseModel(
         data={"access_token": access_token, "token_type": "bearer"},
         message="Token refreshed successfully",
@@ -98,8 +121,12 @@ async def logout(payload: RefreshRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/me")
-async def me(current_user: User = Depends(get_current_user)):
+async def me(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    user = await _get_user_with_relations(db, current_user)
     return ResponseModel(
-        data=UserResponse.model_validate(current_user).model_dump(),
+        data=UserResponse.model_validate(user).model_dump(),
         message="User profile fetched successfully",
     )
