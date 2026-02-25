@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from app.models.district import District
     from app.models.role import Role
     from app.models.auth_token import AuthToken
+    from app.models.shop import Shop
 
 class User(Base):
     __tablename__ = "users"
@@ -35,3 +36,4 @@ class User(Base):
     district: Mapped["District"] = relationship("District", back_populates="users")
     role: Mapped["Role"] = relationship("Role", back_populates="users")
     auth_tokens: Mapped[list["AuthToken"]] = relationship("AuthToken", back_populates="user", cascade="all, delete")
+    shops: Mapped[list["Shop"]] = relationship("Shop", back_populates="created_by_user")

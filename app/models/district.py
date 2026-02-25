@@ -5,6 +5,7 @@ from app.database import Base, pk_type
 
 if TYPE_CHECKING:
     from app.models.user import User
+    from app.models.shop import Shop
 
 class District(Base):
     __tablename__ = "districts"
@@ -16,3 +17,4 @@ class District(Base):
 
     # Relationships
     users: Mapped[list["User"]] = relationship("User", back_populates="district")
+    shops: Mapped[list["Shop"]] = relationship("Shop", back_populates="district", cascade="all, delete")
