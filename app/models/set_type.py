@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING
 from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, String, Text, TIMESTAMP, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.database import Base
+from app.database import Base, pk_type
 
 
 if TYPE_CHECKING:
@@ -13,7 +13,7 @@ class SetType(Base):
     __tablename__ = "set_types"
     __table_args__ = (UniqueConstraint("tenant_id", "name"),)
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(pk_type(), primary_key=True, autoincrement=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -33,7 +33,7 @@ class SetTypeDetail(Base):
     __tablename__ = "set_type_details"
     __table_args__ = (UniqueConstraint("set_type_id", "value"),)
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(pk_type(), primary_key=True, autoincrement=True)
     set_type_id: Mapped[int] = mapped_column(ForeignKey("set_types.id", ondelete="CASCADE"), nullable=False)
     value: Mapped[str] = mapped_column(String(50), nullable=False)
     created_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now())

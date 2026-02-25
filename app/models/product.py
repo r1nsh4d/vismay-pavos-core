@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, Numeric, String, TIMESTAMP, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.database import Base
+from app.database import Base, pk_type
 
 
 if TYPE_CHECKING:
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 class Product(Base):
     __tablename__ = "products"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(pk_type(), primary_key=True, autoincrement=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id", ondelete="CASCADE"), nullable=False)
     set_type_id: Mapped[int | None] = mapped_column(ForeignKey("set_types.id", ondelete="SET NULL"), nullable=True)
@@ -41,7 +41,7 @@ class Product(Base):
 class ProductDetail(Base):
     __tablename__ = "product_details"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(pk_type(), primary_key=True, autoincrement=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
     piece_code: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True)
     size: Mapped[str | None] = mapped_column(String(50), nullable=True)

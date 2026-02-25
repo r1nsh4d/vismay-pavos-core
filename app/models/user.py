@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING
 from sqlalchemy import BigInteger, Boolean, ForeignKey, String, Text, TIMESTAMP, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.database import Base
+from app.database import Base, pk_type
 
 if TYPE_CHECKING:
     from app.models.tenant import Tenant
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(pk_type(), primary_key=True, autoincrement=True)
     tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True)
     district_id: Mapped[int | None] = mapped_column(ForeignKey("districts.id"), nullable=True)
     role_id: Mapped[int | None] = mapped_column(ForeignKey("roles.id"), nullable=True)
