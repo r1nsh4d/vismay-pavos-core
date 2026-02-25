@@ -2,9 +2,21 @@ from datetime import datetime
 from pydantic import BaseModel, EmailStr
 
 
+class TenantInUser(BaseModel):
+    id: int
+    tenant_id: int
+    is_active: bool
+    model_config = {"from_attributes": True}
+
+
+class DistrictInUser(BaseModel):
+    id: int
+    district_id: int
+    is_active: bool
+    model_config = {"from_attributes": True}
+
+
 class UserCreate(BaseModel):
-    tenant_id: int | None = None      # None only for SUPER_ADMIN
-    district_id: int | None = None
     role_id: int | None = None
     username: str
     first_name: str
@@ -14,11 +26,11 @@ class UserCreate(BaseModel):
     password: str
     is_active: bool = True
     is_verified: bool = False
+    tenant_ids: list[int] = []    # empty for SUPER_ADMIN
+    district_ids: list[int] = []  # empty for SUPER_ADMIN
 
 
 class UserUpdate(BaseModel):
-    tenant_id: int | None = None
-    district_id: int | None = None
     role_id: int | None = None
     first_name: str | None = None
     last_name: str | None = None
@@ -31,8 +43,6 @@ class UserUpdate(BaseModel):
 
 class UserResponse(BaseModel):
     id: int
-    tenant_id: int | None
-    district_id: int | None
     role_id: int | None
     username: str
     first_name: str
@@ -43,8 +53,17 @@ class UserResponse(BaseModel):
     is_verified: bool
     created_at: datetime
     updated_at: datetime
-
+    user_tenants: list[TenantInUser] = []
+    user_districts: list[DistrictInUser] = []
     model_config = {"from_attributes": True}
+
+
+class AssignTenantsRequest(BaseModel):
+    tenant_ids: list[int]
+
+
+class AssignDistrictsRequest(BaseModel):
+    district_ids: list[int]
 
 
 class ChangePasswordRequest(BaseModel):

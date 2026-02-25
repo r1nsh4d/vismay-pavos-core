@@ -4,7 +4,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base, pk_type
 
 if TYPE_CHECKING:
-    from app.models.user import User
+    from app.models.user import UserDistrict
     from app.models.shop import Shop
 
 class District(Base):
@@ -16,5 +16,5 @@ class District(Base):
     created_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now())
 
     # Relationships
-    users: Mapped[list["User"]] = relationship("User", back_populates="district")
+    user_districts: Mapped[list["UserDistrict"]] = relationship("UserDistrict", back_populates="district", cascade="all, delete")
     shops: Mapped[list["Shop"]] = relationship("Shop", back_populates="district", cascade="all, delete")

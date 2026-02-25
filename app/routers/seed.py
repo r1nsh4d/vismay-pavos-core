@@ -95,8 +95,6 @@ async def run_seed(db: AsyncSession = Depends(get_db)):
     existing_user = await db.scalar(select(User).where(User.email == SUPER_ADMIN["email"]))
     if not existing_user:
         db.add(User(
-            tenant_id=None,
-            district_id=None,
             role_id=role_map.get("super_admin"),
             username=SUPER_ADMIN["username"],
             first_name=SUPER_ADMIN["first_name"],
@@ -106,6 +104,7 @@ async def run_seed(db: AsyncSession = Depends(get_db)):
             password_hash=hash_password(SUPER_ADMIN["password"]),
             is_active=True,
             is_verified=True,
+            # no tenant_id or district_id — super admin has none
         ))
         await db.flush()
         results["super_admin"] = SUPER_ADMIN["email"]

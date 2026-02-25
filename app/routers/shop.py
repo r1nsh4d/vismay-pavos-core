@@ -7,14 +7,14 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.district import District
 from app.models.shop import Shop
-from app.models.user import User
+from app.models.user import User, UserDistrict
 from app.schemas.common import ResponseModel
 from app.schemas.shop import ShopCreate, ShopResponse, ShopUpdate
 
 router = APIRouter(prefix="/shops", tags=["Shops"])
 
 
-# ─── List All (admin use, all filters) ───────────────────────────────────────
+# ─── List All ─────────────────────────────────────────────────────────────────
 
 @router.get("")
 async def list_shops(
@@ -46,8 +46,7 @@ async def list_shops(
     )
 
 
-# ─── List by District (executive primary use case) ───────────────────────────
-# Executive calls this with their own district_id to see all shops they can order for
+# ─── List by District ─────────────────────────────────────────────────────────
 
 @router.get("/district/{district_id}")
 async def list_shops_by_district(
@@ -56,9 +55,8 @@ async def list_shops_by_district(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    _=Depends(get_current_user),
 ):
-    # Validate district exists
     district = await db.scalar(select(District).where(District.id == district_id))
     if not district:
         raise AppException(status_code=404, detail="District not found", error_code="NOT_FOUND")
@@ -81,18 +79,27 @@ async def list_shops_by_district(
     )
 
 
-# ─── List shops in current user's district ───────────────────────────────────
-# Shortcut for executive — no need to pass district_id manually
+# ─── My Districts' Shops ──────────────────────────────────────────────────────
+# Executive shortcut — returns shops from ALL districts the user is assigned to
 
-@router.get("/my-district")
-async def list_my_district_shops(
+@router.get("/my-districts")
+async def list_my_districts_shops(
     is_active: bool | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not current_user.district_id:
+    # Get all district_ids assigned to current user
+    result = await db.execute(
+        select(UserDistrict.district_id).where(
+            UserDistrict.user_id == current_user.id,
+            UserDistrict.is_active == True,
+        )
+    )
+    district_ids = result.scalars().all()
+
+    if not district_ids:
         raise AppException(
             status_code=400,
             detail="Your account is not assigned to any district",
@@ -100,8 +107,8 @@ async def list_my_district_shops(
         )
 
     offset = (page - 1) * page_size
-    query = select(Shop).where(Shop.district_id == current_user.district_id)
-    count_query = select(func.count()).select_from(Shop).where(Shop.district_id == current_user.district_id)
+    query = select(Shop).where(Shop.district_id.in_(district_ids))
+    count_query = select(func.count()).select_from(Shop).where(Shop.district_id.in_(district_ids))
 
     if is_active is not None:
         query = query.where(Shop.is_active == is_active)
@@ -143,12 +150,25 @@ async def create_shop(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Validate district exists
     district = await db.scalar(select(District).where(District.id == payload.district_id))
     if not district:
         raise AppException(status_code=404, detail="District not found", error_code="NOT_FOUND")
 
-    # Duplicate shop name check within same district
+    # Check executive is assigned to this district
+    user_district = await db.scalar(
+        select(UserDistrict).where(
+            UserDistrict.user_id == current_user.id,
+            UserDistrict.district_id == payload.district_id,
+            UserDistrict.is_active == True,
+        )
+    )
+    if not user_district:
+        raise AppException(
+            status_code=403,
+            detail="You are not assigned to this district",
+            error_code="DISTRICT_NOT_ASSIGNED",
+        )
+
     existing = await db.scalar(
         select(Shop).where(
             Shop.district_id == payload.district_id,
@@ -186,7 +206,6 @@ async def update_shop(
     if not shop:
         raise AppException(status_code=404, detail="Shop not found", error_code="NOT_FOUND")
 
-    # Duplicate name check within same district if name is changing
     if payload.name and payload.name != shop.name:
         duplicate = await db.scalar(
             select(Shop).where(
@@ -217,56 +236,38 @@ async def update_shop(
 # ─── Activate ─────────────────────────────────────────────────────────────────
 
 @router.patch("/{shop_id}/activate")
-async def activate_shop(
-    shop_id: int,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
+async def activate_shop(shop_id: int, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
     shop = await db.scalar(select(Shop).where(Shop.id == shop_id))
     if not shop:
         raise AppException(status_code=404, detail="Shop not found", error_code="NOT_FOUND")
     if shop.is_active:
         raise AppException(status_code=400, detail="Shop is already active", error_code="ALREADY_ACTIVE")
-
     shop.is_active = True
     await db.flush()
-
     return ResponseModel(data={"id": shop_id, "is_active": True}, message="Shop activated successfully")
 
 
 # ─── Deactivate ───────────────────────────────────────────────────────────────
 
 @router.patch("/{shop_id}/deactivate")
-async def deactivate_shop(
-    shop_id: int,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
+async def deactivate_shop(shop_id: int, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
     shop = await db.scalar(select(Shop).where(Shop.id == shop_id))
     if not shop:
         raise AppException(status_code=404, detail="Shop not found", error_code="NOT_FOUND")
     if not shop.is_active:
         raise AppException(status_code=400, detail="Shop is already inactive", error_code="ALREADY_INACTIVE")
-
     shop.is_active = False
     await db.flush()
-
     return ResponseModel(data={"id": shop_id, "is_active": False}, message="Shop deactivated successfully")
 
 
 # ─── Delete ───────────────────────────────────────────────────────────────────
 
 @router.delete("/{shop_id}")
-async def delete_shop(
-    shop_id: int,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
+async def delete_shop(shop_id: int, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
     shop = await db.scalar(select(Shop).where(Shop.id == shop_id))
     if not shop:
         raise AppException(status_code=404, detail="Shop not found", error_code="NOT_FOUND")
-
     await db.delete(shop)
     await db.flush()
-
     return ResponseModel(data=[], message="Shop deleted successfully")

@@ -5,7 +5,7 @@ from app.database import Base, pk_type
 
 if TYPE_CHECKING:
     from app.models.role import Role
-    from app.models.user import User
+    from app.models.user import UserTenant
     from app.models.category import Category
     from app.models.set_type import SetType
     from app.models.product import Product
@@ -22,7 +22,7 @@ class Tenant(Base):
 
     # Relationships
     roles: Mapped[list["Role"]] = relationship("Role", back_populates="tenant", cascade="all, delete")
-    users: Mapped[list["User"]] = relationship("User", back_populates="tenant", cascade="all, delete")
+    user_tenants: Mapped[list["UserTenant"]] = relationship("UserTenant", back_populates="tenant", cascade="all, delete")
     categories: Mapped[list["Category"]] = relationship("Category", back_populates="tenant", cascade="all, delete")
     set_types: Mapped[list["SetType"]] = relationship("SetType", back_populates="tenant", cascade="all, delete")
     products: Mapped[list["Product"]] = relationship("Product", back_populates="tenant", cascade="all, delete")
