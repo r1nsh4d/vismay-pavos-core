@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     DEBUG: bool = True
 
     # Development (SQLite)
-    DATABASE_URL = "sqlite+aiosqlite:///./dev.db"
+    DATABASE_URL: str = "sqlite+aiosqlite:///./dev.db"
 
     # Production (PostgresSQL)
     # DATABASE_URL = "postgresql+asyncpg://user:password@localhost:5432/dbname"
