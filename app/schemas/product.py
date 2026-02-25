@@ -6,7 +6,6 @@ from pydantic import BaseModel
 class ProductDetailCreate(BaseModel):
     piece_code: str | None = None
     size: str | None = None
-    status: str = "AVAILABLE"
 
 
 class ProductDetailResponse(BaseModel):
@@ -14,7 +13,6 @@ class ProductDetailResponse(BaseModel):
     product_id: int
     piece_code: str | None
     size: str | None
-    status: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -56,6 +54,17 @@ class ProductResponse(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    details: list[ProductDetailResponse] = []
+
+    model_config = {"from_attributes": True}
+
+
+# Lightweight schema used when selecting products for stock entry
+class ProductSummary(BaseModel):
+    id: int
+    name: str
+    box_code: str
+    total_quantity: int
     details: list[ProductDetailResponse] = []
 
     model_config = {"from_attributes": True}

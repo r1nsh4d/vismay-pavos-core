@@ -1,6 +1,14 @@
-from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, Numeric, String, Text, TIMESTAMP, UniqueConstraint, func
+from typing import TYPE_CHECKING
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, Numeric, String, TIMESTAMP, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.database import Base
+
+
+if TYPE_CHECKING:
+    from app.models.tenant import Tenant
+    from app.models.category import Category
+    from app.models.set_type import SetType
 
 
 class Product(Base):
@@ -9,7 +17,7 @@ class Product(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id", ondelete="CASCADE"), nullable=False)
-    set_type_id: Mapped[int | None] = mapped_column(ForeignKey("set_types.id", ondelete="CASCADE"), nullable=True)
+    set_type_id: Mapped[int | None] = mapped_column(ForeignKey("set_types.id", ondelete="SET NULL"), nullable=True)
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     box_code: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
@@ -22,11 +30,12 @@ class Product(Base):
     created_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now())
     updated_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
-    # Relationships
     tenant: Mapped["Tenant"] = relationship("Tenant", back_populates="products")
     category: Mapped["Category"] = relationship("Category", back_populates="products")
     set_type: Mapped["SetType"] = relationship("SetType", back_populates="products")
-    details: Mapped[list["ProductDetail"]] = relationship("ProductDetail", back_populates="product", cascade="all, delete")
+    details: Mapped[list["ProductDetail"]] = relationship(
+        "ProductDetail", back_populates="product", cascade="all, delete"
+    )
 
 
 class ProductDetail(Base):
@@ -36,8 +45,6 @@ class ProductDetail(Base):
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
     piece_code: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True)
     size: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    status: Mapped[str] = mapped_column(String(50), default="AVAILABLE")   # AVAILABLE / SOLD / RETURNED / DAMAGED
     created_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now())
 
-    # Relationships
     product: Mapped["Product"] = relationship("Product", back_populates="details")

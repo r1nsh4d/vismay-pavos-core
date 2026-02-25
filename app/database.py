@@ -3,12 +3,25 @@ from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
 
 
+def get_engine_kwargs() -> dict:
+    """Return engine kwargs based on the database type."""
+    if settings.DATABASE_URL.startswith("sqlite"):
+        return {
+            "echo": settings.DEBUG,
+            # SQLite doesn't support pool_size / max_overflow
+            "connect_args": {"check_same_thread": False},
+        }
+    return {
+        "echo": settings.DEBUG,
+        "pool_pre_ping": True,
+        "pool_size": 10,
+        "max_overflow": 20,
+    }
+
+
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=settings.DEBUG,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    **get_engine_kwargs(),
 )
 
 AsyncSessionLocal = async_sessionmaker(

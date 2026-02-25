@@ -1,7 +1,14 @@
+from typing import TYPE_CHECKING
 from sqlalchemy import BigInteger, Boolean, String, TIMESTAMP, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
+if TYPE_CHECKING:
+    from app.models.role import Role
+    from app.models.user import User
+    from app.models.category import Category
+    from app.models.set_type import SetType
+    from app.models.product import Product
 
 class Tenant(Base):
     __tablename__ = "tenants"

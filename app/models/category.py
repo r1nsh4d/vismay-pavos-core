@@ -1,7 +1,12 @@
+from typing import TYPE_CHECKING
 from sqlalchemy import BigInteger, Boolean, ForeignKey, String, Text, TIMESTAMP, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
+if TYPE_CHECKING:
+    from app.models.tenant import Tenant
+    from app.models.set_type import SetType
+    from app.models.product import Product
 
 class Category(Base):
     __tablename__ = "categories"

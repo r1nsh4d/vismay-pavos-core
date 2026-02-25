@@ -16,12 +16,10 @@ from app.dependencies import get_current_user
 from app.models.auth_token import AuthToken
 from app.models.user import User
 from app.schemas.auth import (
-    AccessTokenResponse,
     LoginRequest,
     RefreshRequest,
-    TokenResponse,
 )
-from app.schemas.common import ResponseModel, ErrorResponseModel
+from app.schemas.common import ResponseModel
 from app.schemas.user import UserResponse
 from app.config import settings
 

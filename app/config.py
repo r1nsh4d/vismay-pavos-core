@@ -8,9 +8,11 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     DEBUG: bool = True
 
-    # Database
-    DATABASE_URL: str =
+    # Development (SQLite)
+    DATABASE_URL = "sqlite+aiosqlite:///./dev.db"
 
+    # Production (PostgresSQL)
+    # DATABASE_URL = "postgresql+asyncpg://user:password@localhost:5432/dbname"
     # JWT
     SECRET_KEY: str = "secret1"
     ALGORITHM: str = "HS256"

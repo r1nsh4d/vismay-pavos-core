@@ -1,7 +1,13 @@
+from typing import TYPE_CHECKING
 from sqlalchemy import BigInteger, Boolean, ForeignKey, String, Text, TIMESTAMP, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
+if TYPE_CHECKING:
+    from app.models.tenant import Tenant
+    from app.models.district import District
+    from app.models.role import Role
+    from app.models.auth_token import AuthToken
 
 class User(Base):
     __tablename__ = "users"

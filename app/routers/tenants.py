@@ -1,3 +1,4 @@
+# app/routes/tenant.py
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,22 +13,53 @@ from app.schemas.tenant import TenantCreate, TenantResponse, TenantUpdate
 router = APIRouter(prefix="/tenants", tags=["Tenants"])
 
 
+# ─── List All ─────────────────────────────────────────────────────────────────
+
 @router.get("")
 async def list_tenants(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    is_active: bool | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
     offset = (page - 1) * page_size
-    total = await db.scalar(select(func.count()).select_from(Tenant))
-    result = await db.execute(select(Tenant).offset(offset).limit(page_size))
+    query = select(Tenant)
+    count_query = select(func.count()).select_from(Tenant)
+
+    if is_active is not None:
+        query = query.where(Tenant.is_active == is_active)
+        count_query = count_query.where(Tenant.is_active == is_active)
+
+    total = await db.scalar(count_query)
+    result = await db.execute(query.offset(offset).limit(page_size))
     tenants = [TenantResponse.model_validate(t).model_dump() for t in result.scalars().all()]
+
     return ResponseModel(
         data={"total": total, "page": page, "page_size": page_size, "results": tenants},
         message="Tenants fetched successfully",
     )
 
+
+# ─── Get by ID ────────────────────────────────────────────────────────────────
+
+@router.get("/{tenant_id}")
+async def get_tenant(
+    tenant_id: int,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
+    if not tenant:
+        raise AppException(status_code=404, detail="Tenant not found", error_code="NOT_FOUND")
+
+    return ResponseModel(
+        data=TenantResponse.model_validate(tenant).model_dump(),
+        message="Tenant fetched successfully",
+    )
+
+
+# ─── Create ───────────────────────────────────────────────────────────────────
 
 @router.post("", status_code=201)
 async def create_tenant(
@@ -35,31 +67,22 @@ async def create_tenant(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    existing = await db.execute(select(Tenant).where(Tenant.code == payload.code))
-    if existing.scalar_one_or_none():
+    existing = await db.scalar(select(Tenant).where(Tenant.code == payload.code))
+    if existing:
         raise AppException(status_code=409, detail="Tenant code already exists", error_code="DUPLICATE_CODE")
 
     tenant = Tenant(**payload.model_dump())
     db.add(tenant)
     await db.flush()
     await db.refresh(tenant)
+
     return ResponseModel(
         data=TenantResponse.model_validate(tenant).model_dump(),
         message="Tenant created successfully",
     )
 
 
-@router.get("/{tenant_id}")
-async def get_tenant(tenant_id: int, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
-    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
-    tenant = result.scalar_one_or_none()
-    if not tenant:
-        raise AppException(status_code=404, detail="Tenant not found", error_code="NOT_FOUND")
-    return ResponseModel(
-        data=TenantResponse.model_validate(tenant).model_dump(),
-        message="Tenant fetched successfully",
-    )
-
+# ─── Update ───────────────────────────────────────────────────────────────────
 
 @router.patch("/{tenant_id}")
 async def update_tenant(
@@ -68,27 +91,83 @@ async def update_tenant(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
-    tenant = result.scalar_one_or_none()
+    tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
     if not tenant:
         raise AppException(status_code=404, detail="Tenant not found", error_code="NOT_FOUND")
 
+    # Check duplicate code if code is being changed
+    if payload.code and payload.code != tenant.code:
+        duplicate = await db.scalar(
+            select(Tenant).where(Tenant.code == payload.code, Tenant.id != tenant_id)
+        )
+        if duplicate:
+            raise AppException(status_code=409, detail="Tenant code already exists", error_code="DUPLICATE_CODE")
+
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(tenant, field, value)
+
     await db.flush()
     await db.refresh(tenant)
+
     return ResponseModel(
         data=TenantResponse.model_validate(tenant).model_dump(),
         message="Tenant updated successfully",
     )
 
 
-@router.delete("/{tenant_id}")
-async def delete_tenant(tenant_id: int, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
-    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
-    tenant = result.scalar_one_or_none()
+# ─── Activate ─────────────────────────────────────────────────────────────────
+
+@router.patch("/{tenant_id}/activate")
+async def activate_tenant(
+    tenant_id: int,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
     if not tenant:
         raise AppException(status_code=404, detail="Tenant not found", error_code="NOT_FOUND")
+    if tenant.is_active:
+        raise AppException(status_code=400, detail="Tenant is already active", error_code="ALREADY_ACTIVE")
+
+    tenant.is_active = True
+    await db.flush()
+
+    return ResponseModel(data={"id": tenant_id, "is_active": True}, message="Tenant activated successfully")
+
+
+# ─── Deactivate ───────────────────────────────────────────────────────────────
+
+@router.patch("/{tenant_id}/deactivate")
+async def deactivate_tenant(
+    tenant_id: int,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
+    if not tenant:
+        raise AppException(status_code=404, detail="Tenant not found", error_code="NOT_FOUND")
+    if not tenant.is_active:
+        raise AppException(status_code=400, detail="Tenant is already inactive", error_code="ALREADY_INACTIVE")
+
+    tenant.is_active = False
+    await db.flush()
+
+    return ResponseModel(data={"id": tenant_id, "is_active": False}, message="Tenant deactivated successfully")
+
+
+# ─── Delete ───────────────────────────────────────────────────────────────────
+
+@router.delete("/{tenant_id}")
+async def delete_tenant(
+    tenant_id: int,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
+    if not tenant:
+        raise AppException(status_code=404, detail="Tenant not found", error_code="NOT_FOUND")
+
     await db.delete(tenant)
     await db.flush()
+
     return ResponseModel(data=[], message="Tenant deleted successfully")
