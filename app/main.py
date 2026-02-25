@@ -58,6 +58,7 @@ app.include_router(stocks.router, prefix=API_PREFIX)
 app.include_router(orders.router, prefix=API_PREFIX)
 app.include_router(reports.router, prefix=API_PREFIX)
 
+
 @app.get("/", tags=["Health"])
 async def root():
     return {"status": "success", "message": "vismay-pavos-core is running", "data": {"app": settings.APP_NAME, "version": "1.0.0"}}

@@ -1,11 +1,25 @@
 from datetime import datetime
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
+from sqlalchemy import inspect as sa_inspect
+
+
+class TenantInfo(BaseModel):
+    id: int
+    name: str
+    model_config = {"from_attributes": True}
+
+
+class DistrictInfo(BaseModel):
+    id: int
+    name: str
+    model_config = {"from_attributes": True}
 
 
 class TenantInUser(BaseModel):
     id: int
     tenant_id: int
     is_active: bool
+    tenant: TenantInfo  # ← added
     model_config = {"from_attributes": True}
 
 
@@ -13,6 +27,7 @@ class DistrictInUser(BaseModel):
     id: int
     district_id: int
     is_active: bool
+    district: DistrictInfo  # ← added
     model_config = {"from_attributes": True}
 
 
@@ -41,9 +56,24 @@ class UserUpdate(BaseModel):
     is_verified: bool | None = None
 
 
+class RoleInUser(BaseModel):
+    id: int
+    name: str
+    model_config = {"from_attributes": True}
+
+
+class PermissionInfo(BaseModel):
+    id: int
+    name: str
+    code: str
+    model_config = {"from_attributes": True}
+
+
 class UserResponse(BaseModel):
     id: int
     role_id: int | None
+    role: str | None = None
+    permissions: list[str] = []
     username: str
     first_name: str
     last_name: str | None
@@ -56,6 +86,20 @@ class UserResponse(BaseModel):
     user_tenants: list[TenantInUser] = []
     user_districts: list[DistrictInUser] = []
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def extract_role_and_permissions(cls, v):
+        if hasattr(v, "role") and v.role is not None:
+            role_obj = v.role
+            # extract role name
+            v.__dict__["role"] = role_obj.name
+            # extract permissions
+            if hasattr(role_obj, "role_permissions"):
+                v.__dict__["permissions"] = [
+                    rp.permission.code for rp in role_obj.role_permissions
+                ]
+        return v
 
 
 class AssignTenantsRequest(BaseModel):

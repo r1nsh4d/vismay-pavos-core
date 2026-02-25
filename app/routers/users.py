@@ -7,6 +7,7 @@ from app.core.exceptions import AppException
 from app.core.security import hash_password, verify_password
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.models import RolePermission
 from app.models.district import District
 from app.models.role import Role
 from app.models.tenant import Tenant
@@ -26,16 +27,21 @@ router = APIRouter(prefix="/users", tags=["Users"])
 
 # ─── Helper ───────────────────────────────────────────────────────────────────
 
-async def _get_user_with_relations(db, user_id: int) -> User | None:
+async def _get_user_with_relations(db: AsyncSession, user: User) -> User:
+    """Reload user with tenants, districts and role for response."""
+    user_id = user if isinstance(user, int) else user.id  # ← handle both
     result = await db.execute(
         select(User)
         .options(
-            selectinload(User.user_tenants),
-            selectinload(User.user_districts),
+            selectinload(User.role)
+                .selectinload(Role.role_permissions)
+                .selectinload(RolePermission.permission),  # ← load permissions
+            selectinload(User.user_tenants).selectinload(UserTenant.tenant),
+            selectinload(User.user_districts).selectinload(UserDistrict.district),
         )
         .where(User.id == user_id)
     )
-    return result.scalar_one_or_none()
+    return result.scalar_one()
 
 
 # ─── List All ─────────────────────────────────────────────────────────────────
@@ -54,8 +60,11 @@ async def list_users(
 ):
     offset = (page - 1) * page_size
     query = select(User).options(
-        selectinload(User.user_tenants),
-        selectinload(User.user_districts),
+        selectinload(User.role)
+        .selectinload(Role.role_permissions)
+        .selectinload(RolePermission.permission),  # ← add this
+        selectinload(User.user_tenants).selectinload(UserTenant.tenant),
+        selectinload(User.user_districts).selectinload(UserDistrict.district),
     )
     count_query = select(func.count()).select_from(User)
 
@@ -273,7 +282,9 @@ async def update_user(
         setattr(user, field, value)
 
     await db.flush()
-    await db.refresh(user)
+
+    # ← reload with relations instead of db.refresh
+    user = await _get_user_with_relations(db, user_id)
 
     return ResponseModel(
         data=UserResponse.model_validate(user).model_dump(),

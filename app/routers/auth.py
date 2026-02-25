@@ -14,8 +14,9 @@ from app.core.security import (
 )
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.models import RolePermission, Role
 from app.models.auth_token import AuthToken
-from app.models.user import User
+from app.models.user import User, UserTenant, UserDistrict
 from app.schemas.auth import LoginRequest, RefreshRequest
 from app.schemas.common import ResponseModel
 from app.schemas.user import UserResponse
@@ -25,16 +26,19 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 async def _get_user_with_relations(db: AsyncSession, user: User) -> User:
-    """Reload user with tenants and districts for response."""
     result = await db.execute(
         select(User)
         .options(
-            selectinload(User.user_tenants),
-            selectinload(User.user_districts),
+            selectinload(User.role)
+                .selectinload(Role.role_permissions)
+                .selectinload(RolePermission.permission),  # ← this was missing
+            selectinload(User.user_tenants).selectinload(UserTenant.tenant),
+            selectinload(User.user_districts).selectinload(UserDistrict.district),
         )
         .where(User.id == user.id)
     )
     return result.scalar_one()
+
 
 
 @router.post("/login")
