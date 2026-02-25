@@ -11,7 +11,10 @@ from app.core.exceptions import (
     validation_exception_handler,
     internal_server_error_handler,
 )
-from app.routers import auth, tenants, districts, roles, users, categories, set_types, products, seed, shop
+from app.routers import auth, tenants, districts
+from app.routers import roles, users, categories
+from app.routers import stocks, orders, reports
+from app.routers import set_types, products, seed, shop
 
 # add after health check routes
 
@@ -51,7 +54,9 @@ app.include_router(set_types.router, prefix=API_PREFIX)
 app.include_router(products.router, prefix=API_PREFIX)
 app.include_router(seed.router, prefix=API_PREFIX)
 app.include_router(shop.router, prefix=API_PREFIX)
-
+app.include_router(stocks.router, prefix=API_PREFIX)
+app.include_router(orders.router, prefix=API_PREFIX)
+app.include_router(reports.router, prefix=API_PREFIX)
 
 @app.get("/", tags=["Health"])
 async def root():
