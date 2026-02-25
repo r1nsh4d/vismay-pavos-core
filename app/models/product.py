@@ -1,5 +1,5 @@
 from typing import TYPE_CHECKING
-from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, Numeric, String, TIMESTAMP, func
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, Numeric, String, TIMESTAMP, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -26,7 +26,7 @@ class Product(Base):
     purchase_price: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     selling_price: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
 
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
     created_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now())
     updated_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 

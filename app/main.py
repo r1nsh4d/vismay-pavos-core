@@ -11,7 +11,9 @@ from app.core.exceptions import (
     validation_exception_handler,
     internal_server_error_handler,
 )
-from app.routers import auth, tenants, districts, roles, users, categories, set_types, products
+from app.routers import auth, tenants, districts, roles, users, categories, set_types, products, seed
+
+# add after health check routes
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -47,6 +49,7 @@ app.include_router(users.router, prefix=API_PREFIX)
 app.include_router(categories.router, prefix=API_PREFIX)
 app.include_router(set_types.router, prefix=API_PREFIX)
 app.include_router(products.router, prefix=API_PREFIX)
+app.include_router(seed.router, prefix=API_PREFIX)
 
 
 @app.get("/", tags=["Health"])
@@ -57,3 +60,5 @@ async def root():
 @app.get("/health", tags=["Health"])
 async def health():
     return {"status": "success", "message": "Service is healthy", "data": []}
+
+
