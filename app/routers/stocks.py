@@ -8,7 +8,7 @@ from app.dependencies import get_current_user
 from app.models.product import Product
 from app.models.stock import Stock
 from app.models.user import User
-from app.schemas.common import ResponseModel
+from app.schemas.common import ResponseModel, PaginatedResponse
 from app.schemas.stock import StockCreate, StockResponse, StockSummaryResponse
 
 router = APIRouter(prefix="/stocks", tags=["Stocks"])
@@ -19,11 +19,11 @@ async def list_stocks(
     tenant_id: int | None = Query(None),
     product_id: int | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    offset = (page - 1) * page_size
+    offset = (page - 1) * limit
     query = select(Stock)
     count_query = select(func.count()).select_from(Stock)
 
@@ -35,12 +35,14 @@ async def list_stocks(
         count_query = count_query.where(Stock.product_id == product_id)
 
     total = await db.scalar(count_query)
-    result = await db.execute(query.order_by(Stock.created_at.asc()).offset(offset).limit(page_size))
+    result = await db.execute(query.order_by(Stock.created_at.asc()).offset(offset).limit(limit))
     stocks = [StockResponse.model_validate(s).model_dump() for s in result.scalars().all()]
-
-    return ResponseModel(
-        data={"total": total, "page": page, "page_size": page_size, "results": stocks},
+    return PaginatedResponse(
+        data=stocks,
         message="Stocks fetched successfully",
+        page=page,
+        limit=limit,
+        total=total
     )
 
 

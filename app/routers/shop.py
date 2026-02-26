@@ -8,7 +8,7 @@ from app.dependencies import get_current_user
 from app.models.district import District
 from app.models.shop import Shop
 from app.models.user import User, UserDistrict
-from app.schemas.common import ResponseModel
+from app.schemas.common import ResponseModel, PaginatedResponse
 from app.schemas.shop import ShopCreate, ShopResponse, ShopUpdate
 
 router = APIRouter(prefix="/shops", tags=["Shops"])
@@ -19,13 +19,13 @@ router = APIRouter(prefix="/shops", tags=["Shops"])
 @router.get("")
 async def list_shops(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     district_id: int | None = Query(None),
     is_active: bool | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    offset = (page - 1) * page_size
+    offset = (page - 1) * limit
     query = select(Shop)
     count_query = select(func.count()).select_from(Shop)
 
@@ -37,12 +37,15 @@ async def list_shops(
         count_query = count_query.where(Shop.is_active == is_active)
 
     total = await db.scalar(count_query)
-    result = await db.execute(query.offset(offset).limit(page_size))
+    result = await db.execute(query.offset(offset).limit(limit))
     shops = [ShopResponse.model_validate(s).model_dump() for s in result.scalars().all()]
 
-    return ResponseModel(
-        data={"total": total, "page": page, "page_size": page_size, "results": shops},
+    return PaginatedResponse(
+        data=shops,
         message="Shops fetched successfully",
+        limit=limit,
+        page=page,
+        total=total
     )
 
 
@@ -53,7 +56,7 @@ async def list_shops_by_district(
     district_id: int,
     is_active: bool | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -61,7 +64,7 @@ async def list_shops_by_district(
     if not district:
         raise AppException(status_code=404, detail="District not found", error_code="NOT_FOUND")
 
-    offset = (page - 1) * page_size
+    offset = (page - 1) * limit
     query = select(Shop).where(Shop.district_id == district_id)
     count_query = select(func.count()).select_from(Shop).where(Shop.district_id == district_id)
 
@@ -70,12 +73,15 @@ async def list_shops_by_district(
         count_query = count_query.where(Shop.is_active == is_active)
 
     total = await db.scalar(count_query)
-    result = await db.execute(query.offset(offset).limit(page_size))
+    result = await db.execute(query.offset(offset).limit(limit))
     shops = [ShopResponse.model_validate(s).model_dump() for s in result.scalars().all()]
 
-    return ResponseModel(
-        data={"total": total, "page": page, "page_size": page_size, "results": shops},
+    return PaginatedResponse(
+        data=shops,
         message="Shops fetched successfully",
+        limit=limit,
+        page=page,
+        total=total
     )
 
 
@@ -86,7 +92,7 @@ async def list_shops_by_district(
 async def list_my_districts_shops(
     is_active: bool | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -106,7 +112,7 @@ async def list_my_districts_shops(
             error_code="NO_DISTRICT",
         )
 
-    offset = (page - 1) * page_size
+    offset = (page - 1) * limit
     query = select(Shop).where(Shop.district_id.in_(district_ids))
     count_query = select(func.count()).select_from(Shop).where(Shop.district_id.in_(district_ids))
 
@@ -115,12 +121,15 @@ async def list_my_districts_shops(
         count_query = count_query.where(Shop.is_active == is_active)
 
     total = await db.scalar(count_query)
-    result = await db.execute(query.offset(offset).limit(page_size))
+    result = await db.execute(query.offset(offset).limit(limit))
     shops = [ShopResponse.model_validate(s).model_dump() for s in result.scalars().all()]
 
-    return ResponseModel(
-        data={"total": total, "page": page, "page_size": page_size, "results": shops},
+    return PaginatedResponse(
+        data=shops,
         message="Shops fetched successfully",
+        limit=limit,
+        page=page,
+        total=total
     )
 
 

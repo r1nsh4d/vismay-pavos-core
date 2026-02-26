@@ -8,7 +8,7 @@ from app.core.exceptions import AppException
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.set_type import SetType, SetTypeDetail
-from app.schemas.common import ResponseModel
+from app.schemas.common import ResponseModel, PaginatedResponse
 from app.schemas.set_type import SetTypeCreate, SetTypeResponse, SetTypeUpdate
 
 router = APIRouter(prefix="/set-types", tags=["Set Types"])
@@ -47,13 +47,13 @@ async def list_set_types_by_tenant_and_category(
 @router.get("")
 async def list_set_types(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     tenant_id: int | None = Query(None),
     category_id: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    offset = (page - 1) * page_size
+    offset = (page - 1) * limit
     query = select(SetType).options(selectinload(SetType.details))
     count_query = select(func.count()).select_from(SetType)
 
@@ -65,12 +65,15 @@ async def list_set_types(
         count_query = count_query.where(SetType.category_id == category_id)
 
     total = await db.scalar(count_query)
-    result = await db.execute(query.offset(offset).limit(page_size))
+    result = await db.execute(query.offset(offset).limit(limit))
     items = [SetTypeResponse.model_validate(s).model_dump() for s in result.scalars().all()]
 
-    return ResponseModel(
-        data={"total": total, "page": page, "page_size": page_size, "results": items},
+    return PaginatedResponse(
+        data=items,
         message="Set types fetched successfully",
+        limit=limit,
+        page=page,
+        total=total
     )
 
 

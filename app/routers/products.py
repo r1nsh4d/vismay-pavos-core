@@ -7,7 +7,7 @@ from app.core.exceptions import AppException
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.product import Product, ProductDetail
-from app.schemas.common import ResponseModel
+from app.schemas.common import ResponseModel, PaginatedResponse
 from app.schemas.product import ProductCreate, ProductResponse, ProductSummary, ProductUpdate
 
 router = APIRouter(prefix="/products", tags=["Products"])
@@ -18,14 +18,14 @@ router = APIRouter(prefix="/products", tags=["Products"])
 @router.get("")
 async def list_products(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     tenant_id: int | None = Query(None),
     category_id: int | None = Query(None),
     is_active: bool | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    offset = (page - 1) * page_size
+    offset = (page - 1) * limit
     query = select(Product).options(selectinload(Product.details))
     count_query = select(func.count()).select_from(Product)
 
@@ -40,12 +40,15 @@ async def list_products(
         count_query = count_query.where(Product.is_active == is_active)
 
     total = await db.scalar(count_query)
-    result = await db.execute(query.offset(offset).limit(page_size))
+    result = await db.execute(query.offset(offset).limit(limit))
     items = [ProductResponse.model_validate(p).model_dump() for p in result.scalars().all()]
 
-    return ResponseModel(
-        data={"total": total, "page": page, "page_size": page_size, "results": items},
+    return PaginatedResponse(
+        data=items,
         message="Products fetched successfully",
+        limit=limit,
+        page=page,
+        total=total
     )
 
 
@@ -56,11 +59,11 @@ async def list_products_by_tenant(
     tenant_id: int,
     is_active: bool | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    offset = (page - 1) * page_size
+    offset = (page - 1) * limit
     query = select(Product).options(selectinload(Product.details)).where(Product.tenant_id == tenant_id)
     count_query = select(func.count()).select_from(Product).where(Product.tenant_id == tenant_id)
 
@@ -69,12 +72,15 @@ async def list_products_by_tenant(
         count_query = count_query.where(Product.is_active == is_active)
 
     total = await db.scalar(count_query)
-    result = await db.execute(query.offset(offset).limit(page_size))
+    result = await db.execute(query.offset(offset).limit(limit))
     items = [ProductResponse.model_validate(p).model_dump() for p in result.scalars().all()]
 
-    return ResponseModel(
-        data={"total": total, "page": page, "page_size": page_size, "results": items},
+    return PaginatedResponse(
+        data=items,
         message="Products fetched successfully",
+        limit=limit,
+        page=page,
+        total=total
     )
 
 
@@ -86,11 +92,11 @@ async def list_products_by_category(
     tenant_id: int | None = Query(None),
     is_active: bool | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    offset = (page - 1) * page_size
+    offset = (page - 1) * limit
     query = select(Product).options(selectinload(Product.details)).where(Product.category_id == category_id)
     count_query = select(func.count()).select_from(Product).where(Product.category_id == category_id)
 
@@ -102,12 +108,15 @@ async def list_products_by_category(
         count_query = count_query.where(Product.is_active == is_active)
 
     total = await db.scalar(count_query)
-    result = await db.execute(query.offset(offset).limit(page_size))
+    result = await db.execute(query.offset(offset).limit(limit))
     items = [ProductResponse.model_validate(p).model_dump() for p in result.scalars().all()]
 
-    return ResponseModel(
-        data={"total": total, "page": page, "page_size": page_size, "results": items},
+    return PaginatedResponse(
+        data=items,
         message="Products fetched successfully",
+        limit=limit,
+        page=page,
+        total=total
     )
 
 

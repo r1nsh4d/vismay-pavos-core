@@ -20,9 +20,10 @@ def camelize(data: Any) -> Any:
 
 
 class CommonResponse(BaseModel):
-    status: str = "failure"
-    message: str = "API failed"
+    success: bool = True
+    message: str = "Success"
     data: Optional[Any] = None
+    meta: Optional[Any] = None
 
     model_config = ConfigDict(
         alias_generator=to_camel,
@@ -56,4 +57,19 @@ def ErrorResponseModel(error: Any, code: int, message: str) -> ErrorResponse:
         error_code=code,
         message=message,
         error=camelize(error),
+    )
+
+
+def PaginatedResponse(data: list, message: str, page: int, limit: int, total: int,) -> CommonResponse:
+    import math
+    return CommonResponse(
+        success=True,
+        message=message,
+        data=camelize(data),
+        meta={
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "totalPages": math.ceil(total / limit) if limit > 0 else 0,
+        },
     )

@@ -12,7 +12,7 @@ from app.models.district import District
 from app.models.role import Role
 from app.models.tenant import Tenant
 from app.models.user import User, UserDistrict, UserTenant
-from app.schemas.common import ResponseModel
+from app.schemas.common import ResponseModel, PaginatedResponse
 from app.schemas.user import (
     AssignDistrictsRequest,
     AssignTenantsRequest,
@@ -49,7 +49,7 @@ async def _get_user_with_relations(db: AsyncSession, user: User) -> User:
 @router.get("")
 async def list_users(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     tenant_id: int | None = Query(None),
     district_id: int | None = Query(None),
     role_id: int | None = Query(None),
@@ -58,7 +58,7 @@ async def list_users(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    offset = (page - 1) * page_size
+    offset = (page - 1) * limit
     query = select(User).options(
         selectinload(User.role)
         .selectinload(Role.role_permissions)
@@ -85,12 +85,15 @@ async def list_users(
         count_query = count_query.where(User.is_verified == is_verified)
 
     total = await db.scalar(count_query)
-    result = await db.execute(query.offset(offset).limit(page_size))
+    result = await db.execute(query.offset(offset).limit(limit))
     users = [UserResponse.model_validate(u).model_dump() for u in result.scalars().all()]
 
-    return ResponseModel(
-        data={"total": total, "page": page, "page_size": page_size, "results": users},
+    return PaginatedResponse(
+        data=users,
         message="Users fetched successfully",
+        limit=limit,
+        page=page,
+        total=total
     )
 
 

@@ -8,7 +8,7 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.category import Category
 from app.schemas.category import CategoryCreate, CategoryResponse, CategoryUpdate
-from app.schemas.common import ResponseModel
+from app.schemas.common import ResponseModel, PaginatedResponse
 
 router = APIRouter(prefix="/categories", tags=["Categories"])
 
@@ -18,12 +18,12 @@ router = APIRouter(prefix="/categories", tags=["Categories"])
 @router.get("")
 async def list_categories(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     tenant_id: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    offset = (page - 1) * page_size
+    offset = (page - 1) * limit
     query = select(Category)
     count_query = select(func.count()).select_from(Category)
 
@@ -32,12 +32,14 @@ async def list_categories(
         count_query = count_query.where(Category.tenant_id == tenant_id)
 
     total = await db.scalar(count_query)
-    result = await db.execute(query.offset(offset).limit(page_size))
+    result = await db.execute(query.offset(offset).limit(limit))
     cats = [CategoryResponse.model_validate(c).model_dump() for c in result.scalars().all()]
-
-    return ResponseModel(
-        data={"total": total, "page": page, "page_size": page_size, "results": cats},
+    return PaginatedResponse(
+        data=cats,
         message="Categories fetched successfully",
+        page=page,
+        limit=limit,
+        total=total
     )
 
 
@@ -47,21 +49,24 @@ async def list_categories(
 async def list_categories_by_tenant(
     tenant_id: int,
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    offset = (page - 1) * page_size
+    offset = (page - 1) * limit
     query = select(Category).where(Category.tenant_id == tenant_id)
     count_query = select(func.count()).select_from(Category).where(Category.tenant_id == tenant_id)
 
     total = await db.scalar(count_query)
-    result = await db.execute(query.offset(offset).limit(page_size))
+    result = await db.execute(query.offset(offset).limit(limit))
     cats = [CategoryResponse.model_validate(c).model_dump() for c in result.scalars().all()]
 
-    return ResponseModel(
-        data={"total": total, "page": page, "page_size": page_size, "results": cats},
+    return PaginatedResponse(
+        data=cats,
         message="Categories fetched successfully",
+        page=page,
+        limit=limit,
+        total=total
     )
 
 

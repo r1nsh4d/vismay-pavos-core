@@ -6,7 +6,7 @@ from app.core.exceptions import AppException
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.district import District
-from app.schemas.common import ResponseModel
+from app.schemas.common import ResponseModel, PaginatedResponse
 from app.schemas.district import DistrictCreate, DistrictResponse, DistrictUpdate
 
 router = APIRouter(prefix="/districts", tags=["Districts"])
@@ -15,17 +15,20 @@ router = APIRouter(prefix="/districts", tags=["Districts"])
 @router.get("")
 async def list_districts(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    offset = (page - 1) * page_size
+    offset = (page - 1) * limit
     total = await db.scalar(select(func.count()).select_from(District))
-    result = await db.execute(select(District).offset(offset).limit(page_size))
+    result = await db.execute(select(District).offset(offset).limit(limit))
     districts = [DistrictResponse.model_validate(d).model_dump() for d in result.scalars().all()]
-    return ResponseModel(
-        data={"total": total, "page": page, "page_size": page_size, "results": districts},
+    return PaginatedResponse(
+        data=districts,
         message="Districts fetched successfully",
+        limit=limit,
+        page=page,
+        total=total
     )
 
 

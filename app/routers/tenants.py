@@ -7,7 +7,7 @@ from app.core.exceptions import AppException
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.tenant import Tenant
-from app.schemas.common import ResponseModel
+from app.schemas.common import ResponseModel, PaginatedResponse
 from app.schemas.tenant import TenantCreate, TenantResponse, TenantUpdate
 
 router = APIRouter(prefix="/tenants", tags=["Tenants"])
@@ -18,12 +18,12 @@ router = APIRouter(prefix="/tenants", tags=["Tenants"])
 @router.get("")
 async def list_tenants(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     is_active: bool | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    offset = (page - 1) * page_size
+    offset = (page - 1) * limit
     query = select(Tenant)
     count_query = select(func.count()).select_from(Tenant)
 
@@ -32,12 +32,15 @@ async def list_tenants(
         count_query = count_query.where(Tenant.is_active == is_active)
 
     total = await db.scalar(count_query)
-    result = await db.execute(query.offset(offset).limit(page_size))
+    result = await db.execute(query.offset(offset).limit(limit))
     tenants = [TenantResponse.model_validate(t).model_dump() for t in result.scalars().all()]
 
-    return ResponseModel(
-        data={"total": total, "page": page, "page_size": page_size, "results": tenants},
+    return PaginatedResponse(
+        data=tenants,
         message="Tenants fetched successfully",
+        limit=limit,
+        page=page,
+        total=total
     )
 
 

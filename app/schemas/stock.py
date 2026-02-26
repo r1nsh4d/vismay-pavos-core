@@ -1,12 +1,12 @@
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class StockCreate(BaseModel):
-    tenant_id: int
-    product_id: int
-    boxes_total: int
-    batch_ref: str | None = None
+    tenant_id: int = Field(..., example=1)
+    product_id: int = Field(..., example=1)
+    boxes_total: int = Field(..., example=10)
+    batch_ref: str | None = Field(None, example="BATCH-2026-001")
 
 
 class StockResponse(BaseModel):

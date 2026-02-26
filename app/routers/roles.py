@@ -8,7 +8,7 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.permission import Permission, RolePermission
 from app.models.role import Role
-from app.schemas.common import ResponseModel
+from app.schemas.common import ResponseModel, PaginatedResponse
 from app.schemas.role_permission import (
     AssignPermissionsRequest,
     PermissionCreate,
@@ -29,17 +29,21 @@ router = APIRouter(tags=["Roles & Permissions"])
 @router.get("/permissions")
 async def list_permissions(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    offset = (page - 1) * page_size
+    offset = (page - 1) * limit
     total = await db.scalar(select(func.count()).select_from(Permission))
-    result = await db.execute(select(Permission).offset(offset).limit(page_size))
+    result = await db.execute(select(Permission).offset(offset).limit(limit))
     perms = [PermissionResponse.model_validate(p).model_dump() for p in result.scalars().all()]
-    return ResponseModel(
-        data={"total": total, "page": page, "page_size": page_size, "results": perms},
+
+    return PaginatedResponse(
+        data=perms,
         message="Permissions fetched successfully",
+        limit=limit,
+        page=page,
+        total=total
     )
 
 
@@ -137,13 +141,13 @@ async def delete_permission(
 @router.get("/roles")
 async def list_roles(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     tenant_id: int | None = Query(None),
     is_active: bool | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    offset = (page - 1) * page_size
+    offset = (page - 1) * limit
     query = select(Role)
     count_query = select(func.count()).select_from(Role)
 
@@ -155,12 +159,15 @@ async def list_roles(
         count_query = count_query.where(Role.is_active == is_active)
 
     total = await db.scalar(count_query)
-    result = await db.execute(query.offset(offset).limit(page_size))
+    result = await db.execute(query.offset(offset).limit(limit))
     roles = [RoleResponse.model_validate(r).model_dump() for r in result.scalars().all()]
 
-    return ResponseModel(
-        data={"total": total, "page": page, "page_size": page_size, "results": roles},
+    return PaginatedResponse(
+        data=roles,
         message="Roles fetched successfully",
+        limit=limit,
+        page=page,
+        total=total
     )
 
 
