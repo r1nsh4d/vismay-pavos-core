@@ -28,8 +28,7 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 # ─── Helper ───────────────────────────────────────────────────────────────────
 
-async def _get_user_with_relations(db: AsyncSession, user: User) -> User:
-    """Reload user with tenants, districts and role for response, using UUID."""
+async def _get_user_with_relations(db: AsyncSession, user: User) -> dict:
     result = await db.execute(
         select(User)
         .options(
@@ -41,7 +40,54 @@ async def _get_user_with_relations(db: AsyncSession, user: User) -> User:
         )
         .where(User.id == user.id)
     )
-    return result.scalar_one()
+    u = result.scalar_one()
+
+    # Flatten permissions from role
+    permissions = []
+    if u.role and u.role.role_permissions:
+        permissions = [rp.permission.code for rp in u.role.role_permissions if rp.permission]
+
+    # Flatten tenants
+    user_tenants = [
+        {
+            "id": str(ut.id),
+            "tenantId": str(ut.tenant_id),
+            "isActive": ut.is_active,
+            "name": ut.tenant.name,
+            "code": ut.tenant.code,
+        }
+        for ut in u.user_tenants
+    ]
+
+    # Flatten districts
+    user_districts = [
+        {
+            "id": str(ud.id),
+            "districtId": str(ud.district_id),
+            "isActive": ud.is_active,
+            "name": ud.district.name,
+            "state": ud.district.state,
+        }
+        for ud in u.user_districts
+    ]
+
+    return {
+        "id": str(u.id),
+        "roleId": str(u.role_id) if u.role_id else None,
+        "role": u.role.name if u.role else None,
+        "permissions": permissions,
+        "username": u.username,
+        "firstName": u.first_name,
+        "lastName": u.last_name,
+        "email": u.email,
+        "phone": u.phone,
+        "isActive": u.is_active,
+        "isVerified": u.is_verified,
+        "createdAt": u.created_at.isoformat() if u.created_at else None,
+        "updatedAt": u.updated_at.isoformat() if u.updated_at else None,
+        "userTenants": user_tenants,
+        "userDistricts": user_districts,
+    }
 
 
 # ─── Login ────────────────────────────────────────────────────────────────────
@@ -57,7 +103,7 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(payload.password, user.password_hash):
-        raise AppException(status_code=401, detail="Invalid credentials", error_code="INVALID_CREDENTIALS")
+        raise AppException(status_code=400, detail="Invalid credentials", error_code="INVALID_CREDENTIALS")
 
     if not user.is_active:
         raise AppException(status_code=403, detail="Account is inactive", error_code="ACCOUNT_INACTIVE")

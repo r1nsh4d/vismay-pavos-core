@@ -61,6 +61,7 @@ MODULES = [
     "stocks",
     "orders",
     "reports",
+    "dashboard"
 ]
 ACTIONS = ["read", "create", "update", "delete"]
 
@@ -83,8 +84,8 @@ SUPER_ADMIN = {
     "password": "Admin@1234",
 }
 
+#ignore
 ADMIN ={
-  "role_id": "01645920-f1d1-49d5-8d1c-b6984f600945",
   "username": "amaanShah",
   "first_name": "Amaan",
   "last_name": "Shah",
@@ -93,7 +94,7 @@ ADMIN ={
   "password": "password",
   "is_active": True,
   "is_verified": False,
-  "tenant_ids": ["99c19180-2cb1-4b63-8eed-6b5b4ec0395f"],
+  "tenant_ids": [],
   "district_ids": []
 }
 
@@ -180,6 +181,25 @@ async def run_seed(db: AsyncSession = Depends(get_db)):
                 assigned_count += 1
         await db.flush()
         results["super_admin_permissions_assigned"] = assigned_count
+
+    admin_role_id = role_map.get("admin")
+    if admin_role_id:
+        assigned_count = 0
+        for perm_code, perm_id in permission_map.items():
+            existing = await db.scalar(
+                select(RolePermission).where(
+                    RolePermission.role_id == admin_role_id,
+                    RolePermission.permission_id == perm_id,
+                )
+            )
+            if not existing:
+                db.add(RolePermission(
+                    role_id=admin_role_id,
+                    permission_id=perm_id,
+                ))
+                assigned_count += 1
+        await db.flush()
+        results["admin_permissions_assigned"] = assigned_count
 
     # ── Step 7: Seed super admin user ─────────────────────────────────────────
     existing_user = await db.scalar(select(User).where(User.email == SUPER_ADMIN["email"]))
