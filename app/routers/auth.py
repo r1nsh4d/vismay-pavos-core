@@ -51,8 +51,8 @@ async def _get_user_with_relations(db: AsyncSession, user: User) -> dict:
     user_tenants = [
         {
             "id": str(ut.id),
-            "tenantId": str(ut.tenant_id),
-            "isActive": ut.is_active,
+            "tenant_id": str(ut.tenant_id),
+            "is_active": ut.is_active,
             "name": ut.tenant.name,
             "code": ut.tenant.code,
         }
@@ -62,33 +62,35 @@ async def _get_user_with_relations(db: AsyncSession, user: User) -> dict:
     # Flatten districts
     user_districts = [
         {
-            "id": str(ud.id),
-            "districtId": str(ud.district_id),
-            "isActive": ud.is_active,
-            "name": ud.district.name,
-            "state": ud.district.state,
-        }
+        "id": str(ud.id),
+        "tenant_id": str(ud.tenant_id), # Was tenantId
+        "is_active": ud.is_active,     # Was isActive
+        "tenant": {                     # This must be an object matching TenantInfo
+            "id": ud.tenant.id,
+            "name": ud.tenant.name,
+            "code": ud.tenant.code,
+        },
+    }
         for ud in u.user_districts
     ]
 
     return {
-        "id": str(u.id),
-        "roleId": str(u.role_id) if u.role_id else None,
-        "role": u.role.name if u.role else None,
-        "permissions": permissions,
-        "username": u.username,
-        "firstName": u.first_name,
-        "lastName": u.last_name,
-        "email": u.email,
-        "phone": u.phone,
-        "isActive": u.is_active,
-        "isVerified": u.is_verified,
-        "createdAt": u.created_at.isoformat() if u.created_at else None,
-        "updatedAt": u.updated_at.isoformat() if u.updated_at else None,
-        "userTenants": user_tenants,
-        "userDistricts": user_districts,
-    }
-
+    "id": str(u.id),
+    "role_id": str(u.role_id) if u.role_id else None, # Changed roleId
+    "role": u.role.name if u.role else None,
+    "permissions": permissions,
+    "username": u.username,
+    "first_name": u.first_name, # Changed firstName
+    "last_name": u.last_name,   # Changed lastName
+    "email": u.email,
+    "phone": u.phone,
+    "is_active": u.is_active,   # Changed isActive
+    "is_verified": u.is_verified, # Changed isVerified
+    "created_at": u.created_at,  # Changed createdAt (Pydantic handles isoformat)
+    "updated_at": u.updated_at,  # Changed updatedAt
+    "user_tenants": user_tenants,   # Changed userTenants
+    "user_districts": user_districts, # Changed userDistricts
+}
 
 # ─── Login ────────────────────────────────────────────────────────────────────
 
