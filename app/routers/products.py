@@ -1,3 +1,4 @@
+import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,8 +20,8 @@ router = APIRouter(prefix="/products", tags=["Products"])
 async def list_products(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
-    tenant_id: int | None = Query(None),
-    category_id: int | None = Query(None),
+    tenant_id: uuid.UUID | None = Query(None),
+    category_id: uuid.UUID | None = Query(None),
     is_active: bool | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
@@ -39,7 +40,7 @@ async def list_products(
         query = query.where(Product.is_active == is_active)
         count_query = count_query.where(Product.is_active == is_active)
 
-    total = await db.scalar(count_query)
+    total = await db.scalar(count_query) or 0
     result = await db.execute(query.offset(offset).limit(limit))
     items = [ProductResponse.model_validate(p).model_dump() for p in result.scalars().all()]
 
@@ -56,7 +57,7 @@ async def list_products(
 
 @router.get("/tenant/{tenant_id}")
 async def list_products_by_tenant(
-    tenant_id: int,
+    tenant_id: uuid.UUID,
     is_active: bool | None = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
@@ -71,7 +72,7 @@ async def list_products_by_tenant(
         query = query.where(Product.is_active == is_active)
         count_query = count_query.where(Product.is_active == is_active)
 
-    total = await db.scalar(count_query)
+    total = await db.scalar(count_query) or 0
     result = await db.execute(query.offset(offset).limit(limit))
     items = [ProductResponse.model_validate(p).model_dump() for p in result.scalars().all()]
 
@@ -88,8 +89,8 @@ async def list_products_by_tenant(
 
 @router.get("/category/{category_id}")
 async def list_products_by_category(
-    category_id: int,
-    tenant_id: int | None = Query(None),
+    category_id: uuid.UUID,
+    tenant_id: uuid.UUID | None = Query(None),
     is_active: bool | None = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
@@ -107,7 +108,7 @@ async def list_products_by_category(
         query = query.where(Product.is_active == is_active)
         count_query = count_query.where(Product.is_active == is_active)
 
-    total = await db.scalar(count_query)
+    total = await db.scalar(count_query) or 0
     result = await db.execute(query.offset(offset).limit(limit))
     items = [ProductResponse.model_validate(p).model_dump() for p in result.scalars().all()]
 
@@ -121,13 +122,11 @@ async def list_products_by_category(
 
 
 # ─── List for Stock Entry (summary, tenant + category filter) ─────────────────
-# This is used when adding stock — shows products with their details (sizes/pieces)
-# so the user can select a product and enter box count.
 
 @router.get("/stock-select")
 async def list_products_for_stock(
-    tenant_id: int = Query(...),
-    category_id: int | None = Query(None),
+    tenant_id: uuid.UUID = Query(...),
+    category_id: uuid.UUID | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -149,7 +148,7 @@ async def list_products_for_stock(
 
 @router.get("/{product_id}")
 async def get_product(
-    product_id: int,
+    product_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -174,7 +173,7 @@ async def create_product(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    existing = await db.scalar(select(Product).where(Product.box_code == payload.box_code))
+    existing = await db.scalar(select(Product.id).where(Product.box_code == payload.box_code))
     if existing:
         raise AppException(status_code=409, detail="Box code already exists", error_code="DUPLICATE_BOX_CODE")
 
@@ -186,6 +185,7 @@ async def create_product(
         db.add(ProductDetail(product_id=product.id, **d.model_dump()))
     await db.flush()
 
+    # Re-fetch with relations for the response
     result = await db.execute(
         select(Product).options(selectinload(Product.details)).where(Product.id == product.id)
     )
@@ -199,7 +199,7 @@ async def create_product(
 
 @router.patch("/{product_id}")
 async def update_product(
-    product_id: int,
+    product_id: uuid.UUID,
     payload: ProductUpdate,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
@@ -223,39 +223,33 @@ async def update_product(
     )
 
 
-# ─── Activate ─────────────────────────────────────────────────────────────────
+# ─── Activate / Deactivate ────────────────────────────────────────────────────
 
 @router.patch("/{product_id}/activate")
 async def activate_product(
-    product_id: int,
+    product_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
     product = await db.scalar(select(Product).where(Product.id == product_id))
     if not product:
         raise AppException(status_code=404, detail="Product not found", error_code="NOT_FOUND")
-    if product.is_active:
-        raise AppException(status_code=400, detail="Product is already active", error_code="ALREADY_ACTIVE")
-
+    
     product.is_active = True
     await db.flush()
 
     return ResponseModel(data={"id": product_id, "is_active": True}, message="Product activated successfully")
 
 
-# ─── Deactivate ───────────────────────────────────────────────────────────────
-
 @router.patch("/{product_id}/deactivate")
 async def deactivate_product(
-    product_id: int,
+    product_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
     product = await db.scalar(select(Product).where(Product.id == product_id))
     if not product:
         raise AppException(status_code=404, detail="Product not found", error_code="NOT_FOUND")
-    if not product.is_active:
-        raise AppException(status_code=400, detail="Product is already inactive", error_code="ALREADY_INACTIVE")
 
     product.is_active = False
     await db.flush()
@@ -267,7 +261,7 @@ async def deactivate_product(
 
 @router.delete("/{product_id}")
 async def delete_product(
-    product_id: int,
+    product_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):

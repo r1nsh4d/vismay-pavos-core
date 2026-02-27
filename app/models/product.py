@@ -1,9 +1,11 @@
+
+import uuid
 from typing import TYPE_CHECKING
-from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, Numeric, String, TIMESTAMP, func, text
+from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, TIMESTAMP, func, text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.database import Base, pk_type
-
+from app.database import Base
 
 if TYPE_CHECKING:
     from app.models.tenant import Tenant
@@ -14,10 +16,29 @@ if TYPE_CHECKING:
 class Product(Base):
     __tablename__ = "products"
 
-    id: Mapped[int] = mapped_column(pk_type(), primary_key=True, autoincrement=True)
-    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
-    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id", ondelete="CASCADE"), nullable=False)
-    set_type_id: Mapped[int | None] = mapped_column(ForeignKey("set_types.id", ondelete="SET NULL"), nullable=True)
+    # Primary Key: UUID
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), 
+        primary_key=True, 
+        default=uuid.uuid4
+    )
+    
+    # Foreign Keys: Updated to UUID to match parent tables
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), 
+        ForeignKey("tenants.id", ondelete="CASCADE"), 
+        nullable=False
+    )
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), 
+        ForeignKey("categories.id", ondelete="CASCADE"), 
+        nullable=False
+    )
+    set_type_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), 
+        ForeignKey("set_types.id", ondelete="SET NULL"), 
+        nullable=True
+    )
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     box_code: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
@@ -30,6 +51,7 @@ class Product(Base):
     created_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now())
     updated_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
+    # Relationships
     tenant: Mapped["Tenant"] = relationship("Tenant", back_populates="products")
     category: Mapped["Category"] = relationship("Category", back_populates="products")
     set_type: Mapped["SetType"] = relationship("SetType", back_populates="products")
@@ -41,8 +63,20 @@ class Product(Base):
 class ProductDetail(Base):
     __tablename__ = "product_details"
 
-    id: Mapped[int] = mapped_column(pk_type(), primary_key=True, autoincrement=True)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    # Primary Key: UUID
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), 
+        primary_key=True, 
+        default=uuid.uuid4
+    )
+    
+    # Foreign Key: Must match Product.id
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), 
+        ForeignKey("products.id", ondelete="CASCADE"), 
+        nullable=False
+    )
+    
     piece_code: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True)
     size: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now())

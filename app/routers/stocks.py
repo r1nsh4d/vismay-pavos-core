@@ -1,3 +1,4 @@
+import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,8 +17,8 @@ router = APIRouter(prefix="/stocks", tags=["Stocks"])
 
 @router.get("")
 async def list_stocks(
-    tenant_id: int | None = Query(None),
-    product_id: int | None = Query(None),
+    tenant_id: uuid.UUID | None = Query(None),
+    product_id: uuid.UUID | None = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
@@ -34,9 +35,10 @@ async def list_stocks(
         query = query.where(Stock.product_id == product_id)
         count_query = count_query.where(Stock.product_id == product_id)
 
-    total = await db.scalar(count_query)
+    total = await db.scalar(count_query) or 0
     result = await db.execute(query.order_by(Stock.created_at.asc()).offset(offset).limit(limit))
     stocks = [StockResponse.model_validate(s).model_dump() for s in result.scalars().all()]
+    
     return PaginatedResponse(
         data=stocks,
         message="Stocks fetched successfully",
@@ -48,8 +50,8 @@ async def list_stocks(
 
 @router.get("/availability")
 async def get_stock_availability(
-    tenant_id: int = Query(...),
-    category_id: int = Query(...),
+    tenant_id: uuid.UUID = Query(...),
+    category_id: uuid.UUID = Query(...),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -76,7 +78,7 @@ async def get_stock_availability(
         {
             "product_id": r.product_id,
             "product_name": r.product_name,
-            "boxes_available": r.boxes_available or 0,
+            "boxes_available": int(r.boxes_available or 0),
         }
         for r in rows
     ]
@@ -84,11 +86,18 @@ async def get_stock_availability(
 
 
 @router.get("/{stock_id}")
-async def get_stock(stock_id: int, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
+async def get_stock(
+    stock_id: uuid.UUID, 
+    db: AsyncSession = Depends(get_db), 
+    _=Depends(get_current_user)
+):
     stock = await db.scalar(select(Stock).where(Stock.id == stock_id))
     if not stock:
         raise AppException(status_code=404, detail="Stock not found", error_code="NOT_FOUND")
-    return ResponseModel(data=StockResponse.model_validate(stock).model_dump(), message="Stock fetched successfully")
+    return ResponseModel(
+        data=StockResponse.model_validate(stock).model_dump(), 
+        message="Stock fetched successfully"
+    )
 
 
 @router.post("", status_code=201)
@@ -111,20 +120,30 @@ async def add_stock(
     db.add(stock)
     await db.flush()
     await db.refresh(stock)
-    return ResponseModel(data=StockResponse.model_validate(stock).model_dump(), message="Stock added successfully")
+    return ResponseModel(
+        data=StockResponse.model_validate(stock).model_dump(), 
+        message="Stock added successfully"
+    )
 
 
 @router.delete("/{stock_id}")
-async def delete_stock(stock_id: int, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
+async def delete_stock(
+    stock_id: uuid.UUID, 
+    db: AsyncSession = Depends(get_db), 
+    _=Depends(get_current_user)
+):
     stock = await db.scalar(select(Stock).where(Stock.id == stock_id))
     if not stock:
         raise AppException(status_code=404, detail="Stock not found", error_code="NOT_FOUND")
+    
+    # Safety check before deletion
     if stock.boxes_reserved > 0 or stock.boxes_billed > 0:
         raise AppException(
             status_code=400,
             detail="Cannot delete stock with reserved or billed boxes",
             error_code="STOCK_IN_USE",
         )
+    
     await db.delete(stock)
     await db.flush()
     return ResponseModel(data=[], message="Stock deleted successfully")

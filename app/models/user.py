@@ -1,7 +1,9 @@
 from __future__ import annotations
+import uuid
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, ForeignKey, String, Text, TIMESTAMP, UniqueConstraint, func, text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base, pk_type
 
@@ -18,14 +20,18 @@ class UserTenant(Base):
     __tablename__ = "user_tenants"
     __table_args__ = (UniqueConstraint("user_id", "tenant_id", name="uq_user_tenant"),)
 
-    id: Mapped[int] = mapped_column(pk_type(), primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    # Use UUID for junction PK
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    
+    # FKs must match the parent table type (UUID)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
     created_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now())
 
-    user: Mapped[User] = relationship("User", back_populates="user_tenants")
-    tenant: Mapped[Tenant] = relationship("Tenant", back_populates="user_tenants")
+    user: Mapped["User"] = relationship("User", back_populates="user_tenants")
+    tenant: Mapped["Tenant"] = relationship("Tenant", back_populates="user_tenants")
 
 
 class UserDistrict(Base):
@@ -33,21 +39,25 @@ class UserDistrict(Base):
     __tablename__ = "user_districts"
     __table_args__ = (UniqueConstraint("user_id", "district_id", name="uq_user_district"),)
 
-    id: Mapped[int] = mapped_column(pk_type(), primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    district_id: Mapped[int] = mapped_column(ForeignKey("districts.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    district_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("districts.id", ondelete="CASCADE"), nullable=False)
+    
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
     created_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now())
 
-    user: Mapped[User] = relationship("User", back_populates="user_districts")
-    district: Mapped[District] = relationship("District", back_populates="user_districts")
+    user: Mapped["User"] = relationship("User", back_populates="user_districts")
+    district: Mapped["District"] = relationship("District", back_populates="user_districts")
 
 
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(pk_type(), primary_key=True, autoincrement=True)
-    role_id: Mapped[int | None] = mapped_column(ForeignKey("roles.id"), nullable=True)
+    # Primary Key changed to UUID
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    
+    # Ensure role_id type matches the Role model PK (assuming it is also UUID)
+    role_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("roles.id"), nullable=True)
 
     username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -63,8 +73,8 @@ class User(Base):
     updated_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
     # Relationships
-    role: Mapped[Role] = relationship("Role", back_populates="users")
-    auth_tokens: Mapped[list[AuthToken]] = relationship("AuthToken", back_populates="user", cascade="all, delete")
-    shops: Mapped[list[Shop]] = relationship("Shop", back_populates="created_by_user")
-    user_tenants: Mapped[list[UserTenant]] = relationship("UserTenant", back_populates="user", cascade="all, delete")
-    user_districts: Mapped[list[UserDistrict]] = relationship("UserDistrict", back_populates="user", cascade="all, delete")
+    role: Mapped["Role"] = relationship("Role", back_populates="users")
+    auth_tokens: Mapped[list["AuthToken"]] = relationship("AuthToken", back_populates="user", cascade="all, delete")
+    shops: Mapped[list["Shop"]] = relationship("Shop", back_populates="created_by_user")
+    user_tenants: Mapped[list["UserTenant"]] = relationship("UserTenant", back_populates="user", cascade="all, delete")
+    user_districts: Mapped[list["UserDistrict"]] = relationship("UserDistrict", back_populates="user", cascade="all, delete")

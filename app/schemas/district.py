@@ -1,21 +1,25 @@
+import uuid
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+from typing import Optional
 
 
 class DistrictCreate(BaseModel):
     name: str
-    state: str | None = None
+    state: Optional[str] = None
 
 
 class DistrictUpdate(BaseModel):
-    name: str | None = None
-    state: str | None = None
+    name: Optional[str] = None
+    state: Optional[str] = None
 
 
 class DistrictResponse(BaseModel):
-    id: int
+    # Changed from int to uuid.UUID
+    id: uuid.UUID
     name: str
-    state: str | None
+    state: Optional[str]
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    # Modern Pydantic v2 configuration
+    model_config = ConfigDict(from_attributes=True)

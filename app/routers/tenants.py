@@ -1,4 +1,4 @@
-# app/routes/tenant.py
+import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,7 +31,7 @@ async def list_tenants(
         query = query.where(Tenant.is_active == is_active)
         count_query = count_query.where(Tenant.is_active == is_active)
 
-    total = await db.scalar(count_query)
+    total = await db.scalar(count_query) or 0
     result = await db.execute(query.offset(offset).limit(limit))
     tenants = [TenantResponse.model_validate(t).model_dump() for t in result.scalars().all()]
 
@@ -48,7 +48,7 @@ async def list_tenants(
 
 @router.get("/{tenant_id}")
 async def get_tenant(
-    tenant_id: int,
+    tenant_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -89,7 +89,7 @@ async def create_tenant(
 
 @router.patch("/{tenant_id}")
 async def update_tenant(
-    tenant_id: int,
+    tenant_id: uuid.UUID,
     payload: TenantUpdate,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
@@ -122,47 +122,49 @@ async def update_tenant(
 
 @router.patch("/{tenant_id}/activate")
 async def activate_tenant(
-    tenant_id: int,
+    tenant_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
     tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
     if not tenant:
         raise AppException(status_code=404, detail="Tenant not found", error_code="NOT_FOUND")
-    if tenant.is_active:
-        raise AppException(status_code=400, detail="Tenant is already active", error_code="ALREADY_ACTIVE")
-
+    
     tenant.is_active = True
     await db.flush()
 
-    return ResponseModel(data={"id": tenant_id, "is_active": True}, message="Tenant activated successfully")
+    return ResponseModel(
+        data={"id": tenant_id, "is_active": True}, 
+        message="Tenant activated successfully"
+    )
 
 
 # ─── Deactivate ───────────────────────────────────────────────────────────────
 
 @router.patch("/{tenant_id}/deactivate")
 async def deactivate_tenant(
-    tenant_id: int,
+    tenant_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
     tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
     if not tenant:
         raise AppException(status_code=404, detail="Tenant not found", error_code="NOT_FOUND")
-    if not tenant.is_active:
-        raise AppException(status_code=400, detail="Tenant is already inactive", error_code="ALREADY_INACTIVE")
-
+    
     tenant.is_active = False
     await db.flush()
 
-    return ResponseModel(data={"id": tenant_id, "is_active": False}, message="Tenant deactivated successfully")
+    return ResponseModel(
+        data={"id": tenant_id, "is_active": False}, 
+        message="Tenant deactivated successfully"
+    )
 
 
 # ─── Delete ───────────────────────────────────────────────────────────────────
 
 @router.delete("/{tenant_id}")
 async def delete_tenant(
-    tenant_id: int,
+    tenant_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):

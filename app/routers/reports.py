@@ -1,3 +1,4 @@
+import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,8 +16,8 @@ router = APIRouter(prefix="/reports", tags=["Reports"])
 
 @router.get("/stock-summary")
 async def stock_summary_report(
-    tenant_id: int = Query(...),
-    category_id: int | None = Query(None),
+    tenant_id: uuid.UUID = Query(...),
+    category_id: uuid.UUID | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -42,10 +43,10 @@ async def stock_summary_report(
         {
             "product_id": r.product_id,
             "product_name": r.product_name,
-            "total_in": r.total_in or 0,
-            "available": r.available or 0,
-            "reserved": r.reserved or 0,
-            "dispatched": r.dispatched or 0,
+            "total_in": int(r.total_in or 0),
+            "available": int(r.available or 0),
+            "reserved": int(r.reserved or 0),
+            "dispatched": int(r.dispatched or 0),
         }
         for r in result.all()
     ]
@@ -54,7 +55,7 @@ async def stock_summary_report(
 
 @router.get("/low-stock")
 async def low_stock_alert(
-    tenant_id: int = Query(...),
+    tenant_id: uuid.UUID = Query(...),
     threshold: int = Query(5, description="Alert if available boxes below this"),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
@@ -76,7 +77,7 @@ async def low_stock_alert(
         {
             "product_id": r.product_id,
             "product_name": r.product_name,
-            "boxes_available": r.boxes_available or 0,
+            "boxes_available": int(r.boxes_available or 0),
         }
         for r in result.all()
     ]
@@ -85,8 +86,8 @@ async def low_stock_alert(
 
 @router.get("/orders-by-executive")
 async def orders_by_executive_report(
-    tenant_id: int = Query(...),
-    executive_id: int | None = Query(None),
+    tenant_id: uuid.UUID = Query(...),
+    executive_id: uuid.UUID | None = Query(None),
     status: OrderStatus | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
@@ -129,8 +130,8 @@ async def orders_by_executive_report(
 
 @router.get("/orders-by-shop")
 async def orders_by_shop_report(
-    tenant_id: int = Query(...),
-    shop_id: int | None = Query(None),
+    tenant_id: uuid.UUID = Query(...),
+    shop_id: uuid.UUID | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -153,8 +154,8 @@ async def orders_by_shop_report(
         {
             "shop_id": r.shop_id,
             "total_orders": r.total_orders,
-            "total_boxes_requested": r.total_boxes_requested or 0,
-            "total_boxes_fulfilled": r.total_boxes_fulfilled or 0,
+            "total_boxes_requested": int(r.total_boxes_requested or 0),
+            "total_boxes_fulfilled": int(r.total_boxes_fulfilled or 0),
         }
         for r in result.all()
     ]
@@ -163,7 +164,7 @@ async def orders_by_shop_report(
 
 @router.get("/sales-by-category")
 async def sales_by_category_report(
-    tenant_id: int = Query(...),
+    tenant_id: uuid.UUID = Query(...),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -184,7 +185,7 @@ async def sales_by_category_report(
         {
             "category_id": r.category_id,
             "total_orders": r.total_orders,
-            "boxes_fulfilled": r.boxes_fulfilled or 0,
+            "boxes_fulfilled": int(r.boxes_fulfilled or 0),
         }
         for r in result.all()
     ]

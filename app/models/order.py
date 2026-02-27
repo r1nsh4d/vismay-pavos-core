@@ -1,9 +1,13 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
+
+import uuid
 import enum
+from typing import TYPE_CHECKING
+
 from sqlalchemy import ForeignKey, Integer, String, Text, TIMESTAMP, Enum, func
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.database import Base, pk_type
+from app.database import Base
 
 if TYPE_CHECKING:
     from app.models.tenant import Tenant
@@ -32,18 +36,20 @@ class OrderStatus(str, enum.Enum):
 class Order(Base):
     __tablename__ = "orders"
 
-    id: Mapped[int] = mapped_column(pk_type(), primary_key=True, autoincrement=True)
-    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
-    shop_id: Mapped[int] = mapped_column(ForeignKey("shops.id", ondelete="CASCADE"), nullable=False)
-    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id", ondelete="CASCADE"), nullable=False)
-    placed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    parent_order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id", ondelete="SET NULL"), nullable=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    
+    # All Foreign Keys updated to UUID
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    shop_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shops.id", ondelete="CASCADE"), nullable=False)
+    category_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("categories.id", ondelete="CASCADE"), nullable=False)
+    placed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    parent_order_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("orders.id", ondelete="SET NULL"), nullable=True)
 
     status: Mapped[OrderStatus] = mapped_column(Enum(OrderStatus), default=OrderStatus.PLACED, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     order_ref: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
 
-    # Timestamps for each stage
+    # Timestamps
     submitted_at: Mapped[any] = mapped_column(TIMESTAMP, nullable=True)
     forwarded_at: Mapped[any] = mapped_column(TIMESTAMP, nullable=True)
     approved_at: Mapped[any] = mapped_column(TIMESTAMP, nullable=True)
@@ -54,6 +60,7 @@ class Order(Base):
     created_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now())
     updated_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
+    # Relationships
     tenant: Mapped["Tenant"] = relationship("Tenant")
     shop: Mapped["Shop"] = relationship("Shop")
     category: Mapped["Category"] = relationship("Category")
@@ -65,9 +72,9 @@ class Order(Base):
 class OrderItem(Base):
     __tablename__ = "order_items"
 
-    id: Mapped[int] = mapped_column(pk_type(), primary_key=True, autoincrement=True)
-    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), nullable=False)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    order_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
 
     boxes_requested: Mapped[int] = mapped_column(Integer, nullable=False)
     boxes_fulfilled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -86,9 +93,9 @@ class OrderItemAllocation(Base):
     """Tracks which stock batch is locked for which order item — FIFO"""
     __tablename__ = "order_item_allocations"
 
-    id: Mapped[int] = mapped_column(pk_type(), primary_key=True, autoincrement=True)
-    order_item_id: Mapped[int] = mapped_column(ForeignKey("order_items.id", ondelete="CASCADE"), nullable=False)
-    stock_id: Mapped[int] = mapped_column(ForeignKey("stocks.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    order_item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("order_items.id", ondelete="CASCADE"), nullable=False)
+    stock_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("stocks.id", ondelete="CASCADE"), nullable=False)
     boxes_allocated: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now())
 

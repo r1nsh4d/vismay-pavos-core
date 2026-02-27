@@ -1,3 +1,5 @@
+import uuid
+from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,21 +29,27 @@ router = APIRouter(prefix="/users", tags=["Users"])
 
 # ─── Helper ───────────────────────────────────────────────────────────────────
 
-async def _get_user_with_relations(db: AsyncSession, user: User) -> User:
+async def _get_user_with_relations(db: AsyncSession, user_input: Any) -> User:
     """Reload user with tenants, districts and role for response."""
-    user_id = user if isinstance(user, int) else user.id  # ← handle both
+    # Logic fix: recognize UUID objects directly to avoid AttributeError
+    if isinstance(user_input, (uuid.UUID, str, int)):
+        user_id = user_input
+    else:
+        user_id = user_input.id
+
     result = await db.execute(
         select(User)
         .options(
             selectinload(User.role)
                 .selectinload(Role.role_permissions)
-                .selectinload(RolePermission.permission),  # ← load permissions
+                .selectinload(RolePermission.permission),
             selectinload(User.user_tenants).selectinload(UserTenant.tenant),
             selectinload(User.user_districts).selectinload(UserDistrict.district),
         )
         .where(User.id == user_id)
     )
-    return result.scalar_one()
+    user_obj = result.scalar_one_or_none()
+    return user_obj
 
 
 # ─── List All ─────────────────────────────────────────────────────────────────
@@ -50,9 +58,9 @@ async def _get_user_with_relations(db: AsyncSession, user: User) -> User:
 async def list_users(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
-    tenant_id: int | None = Query(None),
-    district_id: int | None = Query(None),
-    role_id: int | None = Query(None),
+    tenant_id: uuid.UUID | None = Query(None),
+    district_id: uuid.UUID | None = Query(None),
+    role_id: uuid.UUID | None = Query(None),
     is_active: bool | None = Query(None),
     is_verified: bool | None = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -62,7 +70,7 @@ async def list_users(
     query = select(User).options(
         selectinload(User.role)
         .selectinload(Role.role_permissions)
-        .selectinload(RolePermission.permission),  # ← add this
+        .selectinload(RolePermission.permission),
         selectinload(User.user_tenants).selectinload(UserTenant.tenant),
         selectinload(User.user_districts).selectinload(UserDistrict.district),
     )
@@ -84,7 +92,7 @@ async def list_users(
         query = query.where(User.is_verified == is_verified)
         count_query = count_query.where(User.is_verified == is_verified)
 
-    total = await db.scalar(count_query)
+    total = await db.scalar(count_query) or 0
     result = await db.execute(query.offset(offset).limit(limit))
     users = [UserResponse.model_validate(u).model_dump() for u in result.scalars().all()]
 
@@ -101,7 +109,7 @@ async def list_users(
 
 @router.get("/{user_id}")
 async def get_user(
-    user_id: int,
+    user_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -119,12 +127,11 @@ async def get_user(
 
 @router.get("/{user_id}/tenants")
 async def get_user_tenants(
-    user_id: int,
+    user_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    user = await db.scalar(select(User).where(User.id == user_id))
-    if not user:
+    if not await db.scalar(select(User.id).where(User.id == user_id)):
         raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
 
     result = await db.execute(
@@ -150,12 +157,11 @@ async def get_user_tenants(
 
 @router.get("/{user_id}/districts")
 async def get_user_districts(
-    user_id: int,
+    user_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    user = await db.scalar(select(User).where(User.id == user_id))
-    if not user:
+    if not await db.scalar(select(User.id).where(User.id == user_id)):
         raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
 
     result = await db.execute(
@@ -181,7 +187,7 @@ async def get_user_districts(
 
 @router.get("/{user_id}/role")
 async def get_user_role(
-    user_id: int,
+    user_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -211,14 +217,14 @@ async def create_user(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    if await db.scalar(select(User).where(User.email == payload.email)):
+    if await db.scalar(select(User.id).where(User.email == payload.email)):
         raise AppException(status_code=409, detail="Email already registered", error_code="DUPLICATE_EMAIL")
 
-    if await db.scalar(select(User).where(User.username == payload.username)):
+    if await db.scalar(select(User.id).where(User.username == payload.username)):
         raise AppException(status_code=409, detail="Username already taken", error_code="DUPLICATE_USERNAME")
 
     if payload.role_id:
-        if not await db.scalar(select(Role).where(Role.id == payload.role_id)):
+        if not await db.scalar(select(Role.id).where(Role.id == payload.role_id)):
             raise AppException(status_code=404, detail="Role not found", error_code="ROLE_NOT_FOUND")
 
     # Validate tenant_ids
@@ -260,7 +266,7 @@ async def create_user(
 
 @router.patch("/{user_id}")
 async def update_user(
-    user_id: int,
+    user_id: uuid.UUID,
     payload: UserUpdate,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
@@ -270,23 +276,21 @@ async def update_user(
         raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
 
     if payload.email and payload.email != user.email:
-        if await db.scalar(select(User).where(User.email == payload.email, User.id != user_id)):
+        if await db.scalar(select(User.id).where(User.email == payload.email, User.id != user_id)):
             raise AppException(status_code=409, detail="Email already registered", error_code="DUPLICATE_EMAIL")
 
     if payload.username and payload.username != user.username:
-        if await db.scalar(select(User).where(User.username == payload.username, User.id != user_id)):
+        if await db.scalar(select(User.id).where(User.username == payload.username, User.id != user_id)):
             raise AppException(status_code=409, detail="Username already taken", error_code="DUPLICATE_USERNAME")
 
     if payload.role_id:
-        if not await db.scalar(select(Role).where(Role.id == payload.role_id)):
+        if not await db.scalar(select(Role.id).where(Role.id == payload.role_id)):
             raise AppException(status_code=404, detail="Role not found", error_code="ROLE_NOT_FOUND")
 
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(user, field, value)
 
     await db.flush()
-
-    # ← reload with relations instead of db.refresh
     user = await _get_user_with_relations(db, user_id)
 
     return ResponseModel(
@@ -299,12 +303,12 @@ async def update_user(
 
 @router.put("/{user_id}/tenants")
 async def assign_tenants(
-    user_id: int,
+    user_id: uuid.UUID,
     payload: AssignTenantsRequest,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    if not await db.scalar(select(User).where(User.id == user_id)):
+    if not await db.scalar(select(User.id).where(User.id == user_id)):
         raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
 
     if payload.tenant_ids:
@@ -328,12 +332,12 @@ async def assign_tenants(
 
 @router.put("/{user_id}/districts")
 async def assign_districts(
-    user_id: int,
+    user_id: uuid.UUID,
     payload: AssignDistrictsRequest,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    if not await db.scalar(select(User).where(User.id == user_id)):
+    if not await db.scalar(select(User.id).where(User.id == user_id)):
         raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
 
     if payload.district_ids:
@@ -356,24 +360,20 @@ async def assign_districts(
 # ─── Activate / Deactivate ────────────────────────────────────────────────────
 
 @router.patch("/{user_id}/activate")
-async def activate_user(user_id: int, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
+async def activate_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
     user = await db.scalar(select(User).where(User.id == user_id))
     if not user:
         raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
-    if user.is_active:
-        raise AppException(status_code=400, detail="User is already active", error_code="ALREADY_ACTIVE")
     user.is_active = True
     await db.flush()
     return ResponseModel(data={"id": user_id, "is_active": True}, message="User activated successfully")
 
 
 @router.patch("/{user_id}/deactivate")
-async def deactivate_user(user_id: int, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
+async def deactivate_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
     user = await db.scalar(select(User).where(User.id == user_id))
     if not user:
         raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
-    if not user.is_active:
-        raise AppException(status_code=400, detail="User is already inactive", error_code="ALREADY_INACTIVE")
     user.is_active = False
     await db.flush()
     return ResponseModel(data={"id": user_id, "is_active": False}, message="User deactivated successfully")
@@ -383,7 +383,7 @@ async def deactivate_user(user_id: int, db: AsyncSession = Depends(get_db), _=De
 
 @router.patch("/{user_id}/change-password")
 async def change_password(
-    user_id: int,
+    user_id: uuid.UUID,
     payload: ChangePasswordRequest,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
@@ -401,7 +401,7 @@ async def change_password(
 # ─── Delete ───────────────────────────────────────────────────────────────────
 
 @router.delete("/{user_id}")
-async def delete_user(user_id: int, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
+async def delete_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
     user = await db.scalar(select(User).where(User.id == user_id))
     if not user:
         raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")

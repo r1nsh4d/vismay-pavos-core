@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
@@ -25,13 +26,16 @@ from app.config import settings
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
+# ─── Helper ───────────────────────────────────────────────────────────────────
+
 async def _get_user_with_relations(db: AsyncSession, user: User) -> User:
+    """Reload user with tenants, districts and role for response, using UUID."""
     result = await db.execute(
         select(User)
         .options(
             selectinload(User.role)
                 .selectinload(Role.role_permissions)
-                .selectinload(RolePermission.permission),  # ← this was missing
+                .selectinload(RolePermission.permission),
             selectinload(User.user_tenants).selectinload(UserTenant.tenant),
             selectinload(User.user_districts).selectinload(UserDistrict.district),
         )
@@ -40,6 +44,7 @@ async def _get_user_with_relations(db: AsyncSession, user: User) -> User:
     return result.scalar_one()
 
 
+# ─── Login ────────────────────────────────────────────────────────────────────
 
 @router.post("/login")
 async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
@@ -57,13 +62,24 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not user.is_active:
         raise AppException(status_code=403, detail="Account is inactive", error_code="ACCOUNT_INACTIVE")
 
-    # token_data no longer has tenant_id since user can have multiple tenants
-    token_data = {"sub": str(user.id), "role_id": str(user.role_id)}
+    # 🔥 Critical: Cast UUIDs to string for JWT payload
+    token_data = {
+        "sub": str(user.id), 
+        "role_id": str(user.role_id) if user.role_id else None
+    }
+    
     access_token = create_access_token(token_data)
     refresh_token = create_refresh_token(token_data)
 
     expires_at = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    db.add(AuthToken(user_id=user.id, refresh_token=refresh_token, expires_at=expires_at))
+    
+    # AuthToken table now handles user_id as UUID
+    db.add(AuthToken(
+        user_id=user.id, 
+        refresh_token=refresh_token, 
+        expires_at=expires_at,
+        is_revoked=False
+    ))
     await db.flush()
 
     user = await _get_user_with_relations(db, user)
@@ -78,6 +94,8 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
         message="Login successful",
     )
 
+
+# ─── Refresh ──────────────────────────────────────────────────────────────────
 
 @router.post("/refresh")
 async def refresh_token(payload: RefreshRequest, db: AsyncSession = Depends(get_db)):
@@ -99,6 +117,7 @@ async def refresh_token(payload: RefreshRequest, db: AsyncSession = Depends(get_
     if not decoded or decoded.get("type") != "refresh":
         raise AppException(status_code=401, detail="Invalid refresh token", error_code="INVALID_REFRESH_TOKEN")
 
+    # Generate new access token with the same UUID sub
     access_token = create_access_token({
         "sub": decoded["sub"],
         "role_id": decoded.get("role_id"),
@@ -109,6 +128,8 @@ async def refresh_token(payload: RefreshRequest, db: AsyncSession = Depends(get_
         message="Token refreshed successfully",
     )
 
+
+# ─── Logout ───────────────────────────────────────────────────────────────────
 
 @router.post("/logout")
 async def logout(payload: RefreshRequest, db: AsyncSession = Depends(get_db)):
@@ -124,11 +145,14 @@ async def logout(payload: RefreshRequest, db: AsyncSession = Depends(get_db)):
     return ResponseModel(data=[], message="Logged out successfully")
 
 
+# ─── Me ───────────────────────────────────────────────────────────────────────
+
 @router.get("/me")
 async def me(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # current_user is already fetched in dependencies.py using UUID
     user = await _get_user_with_relations(db, current_user)
     return ResponseModel(
         data=UserResponse.model_validate(user).model_dump(),

@@ -1,9 +1,11 @@
+import uuid
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class ShopCreate(BaseModel):
-    district_id: int
+    # Changed from int to uuid.UUID
+    district_id: uuid.UUID
     name: str
     address: str | None = None
     location: str | None = None
@@ -24,9 +26,11 @@ class ShopUpdate(BaseModel):
 
 
 class ShopResponse(BaseModel):
-    id: int
-    district_id: int
-    created_by: int | None
+    # All IDs updated to UUID
+    id: uuid.UUID
+    district_id: uuid.UUID
+    created_by: uuid.UUID | None
+    
     name: str
     address: str | None
     location: str | None
@@ -37,4 +41,5 @@ class ShopResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    # Modern Pydantic v2 configuration
+    model_config = ConfigDict(from_attributes=True)

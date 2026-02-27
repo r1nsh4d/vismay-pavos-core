@@ -1,4 +1,5 @@
 from typing import Annotated
+import uuid
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -10,7 +11,6 @@ from app.core.security import decode_token
 from app.database import get_db
 
 security = HTTPBearer()
-
 
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
@@ -28,14 +28,21 @@ async def get_current_user(
     if not user_id:
         raise AppException(status_code=401, detail="Invalid token payload", error_code="INVALID_TOKEN")
 
-    result = await db.execute(select(User).where(User.id == int(user_id), User.is_active == True))
+    # 2. Change int(user_id) to uuid.UUID(user_id)
+    try:
+        user_uuid = uuid.UUID(str(user_id))
+    except ValueError:
+        raise AppException(status_code=401, detail="Invalid user ID format", error_code="INVALID_TOKEN")
+
+    result = await db.execute(
+        select(User).where(User.id == user_uuid, User.is_active == True)
+    )
     user = result.scalar_one_or_none()
 
     if not user:
         raise AppException(status_code=401, detail="User not found or inactive", error_code="USER_NOT_FOUND")
 
     return user
-
 
 def require_roles(*allowed_roles: str):
     """Dependency factory that checks user role name."""

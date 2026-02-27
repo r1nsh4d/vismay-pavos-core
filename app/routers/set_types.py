@@ -1,4 +1,4 @@
-# app/routes/set_type.py
+import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,13 +15,11 @@ router = APIRouter(prefix="/set-types", tags=["Set Types"])
 
 
 # ─── List by Tenant + Category (PRIMARY USE CASE) ─────────────────────────────
-# Used in product form: select tenant → select category → get set types
-# GET /set-types/filter?tenant_id=1&category_id=2
 
 @router.get("/filter")
 async def list_set_types_by_tenant_and_category(
-    tenant_id: int = Query(...),       # required
-    category_id: int = Query(...),     # required
+    tenant_id: uuid.UUID = Query(...),       # updated to UUID
+    category_id: uuid.UUID = Query(...),     # updated to UUID
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -42,14 +40,14 @@ async def list_set_types_by_tenant_and_category(
     )
 
 
-# ─── List All (admin/debug, all optional filters) ─────────────────────────────
+# ─── List All ─────────────────────────────────────────────────────────────────
 
 @router.get("")
 async def list_set_types(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
-    tenant_id: int | None = Query(None),
-    category_id: int | None = Query(None),
+    tenant_id: uuid.UUID | None = Query(None),
+    category_id: uuid.UUID | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -64,7 +62,7 @@ async def list_set_types(
         query = query.where(SetType.category_id == category_id)
         count_query = count_query.where(SetType.category_id == category_id)
 
-    total = await db.scalar(count_query)
+    total = await db.scalar(count_query) or 0
     result = await db.execute(query.offset(offset).limit(limit))
     items = [SetTypeResponse.model_validate(s).model_dump() for s in result.scalars().all()]
 
@@ -81,7 +79,7 @@ async def list_set_types(
 
 @router.get("/{set_type_id}")
 async def get_set_type(
-    set_type_id: int,
+    set_type_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -106,8 +104,9 @@ async def create_set_type(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
+    # Payload already handles UUIDs for tenant_id and category_id
     existing = await db.scalar(
-        select(SetType).where(
+        select(SetType.id).where(
             SetType.tenant_id == payload.tenant_id,
             SetType.category_id == payload.category_id,
             SetType.name == payload.name,
@@ -141,7 +140,7 @@ async def create_set_type(
 
 @router.patch("/{set_type_id}")
 async def update_set_type(
-    set_type_id: int,
+    set_type_id: uuid.UUID,
     payload: SetTypeUpdate,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
@@ -155,7 +154,7 @@ async def update_set_type(
 
     if payload.name and payload.name != st.name:
         duplicate = await db.scalar(
-            select(SetType).where(
+            select(SetType.id).where(
                 SetType.tenant_id == st.tenant_id,
                 SetType.category_id == st.category_id,
                 SetType.name == payload.name,
@@ -185,7 +184,7 @@ async def update_set_type(
 
 @router.delete("/{set_type_id}")
 async def delete_set_type(
-    set_type_id: int,
+    set_type_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):

@@ -1,5 +1,6 @@
+import uuid
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class TenantCreate(BaseModel):
@@ -15,11 +16,13 @@ class TenantUpdate(BaseModel):
 
 
 class TenantResponse(BaseModel):
-    id: int
+    # Changed from int to uuid.UUID
+    id: uuid.UUID
     name: str
     code: str
     is_active: bool
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    # Modern Pydantic v2 configuration
+    model_config = ConfigDict(from_attributes=True)

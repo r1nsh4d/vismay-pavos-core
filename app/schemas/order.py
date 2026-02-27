@@ -1,52 +1,63 @@
+import uuid
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+from typing import Optional
 from app.models.order import OrderStatus
 
 
 class OrderItemCreate(BaseModel):
-    product_id: int
+    # Changed from int to uuid.UUID
+    product_id: uuid.UUID
     boxes_requested: int
 
 
 class OrderCreate(BaseModel):
-    tenant_id: int
-    shop_id: int
-    category_id: int
-    notes: str | None = None
+    # All relational IDs moved to UUID
+    tenant_id: uuid.UUID
+    shop_id: uuid.UUID
+    category_id: uuid.UUID
+    notes: Optional[str] = None
     items: list[OrderItemCreate]  # all must be same category
 
 
 class OrderItemResponse(BaseModel):
-    id: int
-    product_id: int
+    # Primary and Foreign keys changed to UUID
+    id: uuid.UUID
+    product_id: uuid.UUID
     boxes_requested: int
     boxes_fulfilled: int
     boxes_pending: int
-    model_config = {"from_attributes": True}
+    
+    model_config = ConfigDict(from_attributes=True)
 
 
 class OrderResponse(BaseModel):
-    id: int
-    tenant_id: int
-    shop_id: int
-    category_id: int
-    placed_by: int | None
-    parent_order_id: int | None
+    # Comprehensive UUID update for the entire order tree
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    shop_id: uuid.UUID
+    category_id: uuid.UUID
+    placed_by: Optional[uuid.UUID]
+    parent_order_id: Optional[uuid.UUID]
+    
     status: OrderStatus
-    order_ref: str | None
-    notes: str | None
+    order_ref: Optional[str]
+    notes: Optional[str]
     items: list[OrderItemResponse] = []
-    submitted_at: datetime | None
-    forwarded_at: datetime | None
-    approved_at: datetime | None
-    estimated_at: datetime | None
-    billed_at: datetime | None
-    dispatched_at: datetime | None
-    delivered_at: datetime | None
+    
+    # Timestamps
+    submitted_at: Optional[datetime]
+    forwarded_at: Optional[datetime]
+    approved_at: Optional[datetime]
+    estimated_at: Optional[datetime]
+    billed_at: Optional[datetime]
+    dispatched_at: Optional[datetime]
+    delivered_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
-    model_config = {"from_attributes": True}
+    
+    model_config = ConfigDict(from_attributes=True)
 
 
 class OrderStatusUpdateRequest(BaseModel):
-    notes: str | None = None
+    notes: Optional[str] = None

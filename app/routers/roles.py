@@ -1,4 +1,4 @@
-# app/routes/role_permission.py
+import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,7 +34,7 @@ async def list_permissions(
     _=Depends(get_current_user),
 ):
     offset = (page - 1) * limit
-    total = await db.scalar(select(func.count()).select_from(Permission))
+    total = await db.scalar(select(func.count()).select_from(Permission)) or 0
     result = await db.execute(select(Permission).offset(offset).limit(limit))
     perms = [PermissionResponse.model_validate(p).model_dump() for p in result.scalars().all()]
 
@@ -49,7 +49,7 @@ async def list_permissions(
 
 @router.get("/permissions/{permission_id}")
 async def get_permission(
-    permission_id: int,
+    permission_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -68,10 +68,10 @@ async def create_permission(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    if await db.scalar(select(Permission).where(Permission.code == payload.code)):
+    if await db.scalar(select(Permission.id).where(Permission.code == payload.code)):
         raise AppException(status_code=409, detail="Permission code already exists", error_code="DUPLICATE_CODE")
 
-    if await db.scalar(select(Permission).where(Permission.name == payload.name)):
+    if await db.scalar(select(Permission.id).where(Permission.name == payload.name)):
         raise AppException(status_code=409, detail="Permission name already exists", error_code="DUPLICATE_NAME")
 
     perm = Permission(**payload.model_dump())
@@ -87,7 +87,7 @@ async def create_permission(
 
 @router.patch("/permissions/{permission_id}")
 async def update_permission(
-    permission_id: int,
+    permission_id: uuid.UUID,
     payload: PermissionUpdate,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
@@ -96,14 +96,12 @@ async def update_permission(
     if not perm:
         raise AppException(status_code=404, detail="Permission not found", error_code="NOT_FOUND")
 
-    # Duplicate code check if code is being changed
     if payload.code and payload.code != perm.code:
-        if await db.scalar(select(Permission).where(Permission.code == payload.code, Permission.id != permission_id)):
+        if await db.scalar(select(Permission.id).where(Permission.code == payload.code, Permission.id != permission_id)):
             raise AppException(status_code=409, detail="Permission code already exists", error_code="DUPLICATE_CODE")
 
-    # Duplicate name check if name is being changed
     if payload.name and payload.name != perm.name:
-        if await db.scalar(select(Permission).where(Permission.name == payload.name, Permission.id != permission_id)):
+        if await db.scalar(select(Permission.id).where(Permission.name == payload.name, Permission.id != permission_id)):
             raise AppException(status_code=409, detail="Permission name already exists", error_code="DUPLICATE_NAME")
 
     for field, value in payload.model_dump(exclude_unset=True).items():
@@ -120,7 +118,7 @@ async def update_permission(
 
 @router.delete("/permissions/{permission_id}")
 async def delete_permission(
-    permission_id: int,
+    permission_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -142,7 +140,7 @@ async def delete_permission(
 async def list_roles(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
-    tenant_id: int | None = Query(None),
+    tenant_id: uuid.UUID | None = Query(None),
     is_active: bool | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
@@ -158,7 +156,7 @@ async def list_roles(
         query = query.where(Role.is_active == is_active)
         count_query = count_query.where(Role.is_active == is_active)
 
-    total = await db.scalar(count_query)
+    total = await db.scalar(count_query) or 0
     result = await db.execute(query.offset(offset).limit(limit))
     roles = [RoleResponse.model_validate(r).model_dump() for r in result.scalars().all()]
 
@@ -173,7 +171,7 @@ async def list_roles(
 
 @router.get("/roles/{role_id}")
 async def get_role(
-    role_id: int,
+    role_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -187,16 +185,14 @@ async def get_role(
     )
 
 
-# ─── Get Permissions of a Role ────────────────────────────────────────────────
-
 @router.get("/roles/{role_id}/permissions")
 async def get_role_permissions(
-    role_id: int,
+    role_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    role = await db.scalar(select(Role).where(Role.id == role_id))
-    if not role:
+    role_exists = await db.scalar(select(Role.id).where(Role.id == role_id))
+    if not role_exists:
         raise AppException(status_code=404, detail="Role not found", error_code="NOT_FOUND")
 
     result = await db.execute(
@@ -218,19 +214,14 @@ async def create_role(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    # Duplicate name check within same tenant (respects UniqueConstraint)
     existing = await db.scalar(
-        select(Role).where(
+        select(Role.id).where(
             Role.tenant_id == payload.tenant_id,
             Role.name == payload.name,
         )
     )
     if existing:
-        raise AppException(
-            status_code=409,
-            detail="Role name already exists for this tenant",
-            error_code="DUPLICATE_NAME",
-        )
+        raise AppException(status_code=409, detail="Role name exists", error_code="DUPLICATE_NAME")
 
     role = Role(**payload.model_dump())
     db.add(role)
@@ -245,7 +236,7 @@ async def create_role(
 
 @router.patch("/roles/{role_id}")
 async def update_role(
-    role_id: int,
+    role_id: uuid.UUID,
     payload: RoleUpdate,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
@@ -254,21 +245,16 @@ async def update_role(
     if not role:
         raise AppException(status_code=404, detail="Role not found", error_code="NOT_FOUND")
 
-    # Duplicate name check within same tenant if name is changing
     if payload.name and payload.name != role.name:
         duplicate = await db.scalar(
-            select(Role).where(
+            select(Role.id).where(
                 Role.tenant_id == role.tenant_id,
                 Role.name == payload.name,
                 Role.id != role_id,
             )
         )
         if duplicate:
-            raise AppException(
-                status_code=409,
-                detail="Role name already exists for this tenant",
-                error_code="DUPLICATE_NAME",
-            )
+            raise AppException(status_code=409, detail="Role exists", error_code="DUPLICATE_NAME")
 
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(role, field, value)
@@ -282,95 +268,60 @@ async def update_role(
     )
 
 
-# ─── Activate / Deactivate Role ───────────────────────────────────────────────
-
 @router.patch("/roles/{role_id}/activate")
-async def activate_role(
-    role_id: int,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
+async def activate_role(role_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
     role = await db.scalar(select(Role).where(Role.id == role_id))
     if not role:
         raise AppException(status_code=404, detail="Role not found", error_code="NOT_FOUND")
-    if role.is_active:
-        raise AppException(status_code=400, detail="Role is already active", error_code="ALREADY_ACTIVE")
-
     role.is_active = True
     await db.flush()
-
-    return ResponseModel(data={"id": role_id, "is_active": True}, message="Role activated successfully")
+    return ResponseModel(data={"id": role_id, "is_active": True}, message="Role activated")
 
 
 @router.patch("/roles/{role_id}/deactivate")
-async def deactivate_role(
-    role_id: int,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
+async def deactivate_role(role_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
     role = await db.scalar(select(Role).where(Role.id == role_id))
     if not role:
         raise AppException(status_code=404, detail="Role not found", error_code="NOT_FOUND")
-    if not role.is_active:
-        raise AppException(status_code=400, detail="Role is already inactive", error_code="ALREADY_INACTIVE")
-
     role.is_active = False
     await db.flush()
-
-    return ResponseModel(data={"id": role_id, "is_active": False}, message="Role deactivated successfully")
+    return ResponseModel(data={"id": role_id, "is_active": False}, message="Role deactivated")
 
 
 @router.delete("/roles/{role_id}")
-async def delete_role(
-    role_id: int,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
+async def delete_role(role_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
     role = await db.scalar(select(Role).where(Role.id == role_id))
     if not role:
         raise AppException(status_code=404, detail="Role not found", error_code="NOT_FOUND")
-
     await db.delete(role)
     await db.flush()
+    return ResponseModel(data=[], message="Role deleted")
 
-    return ResponseModel(data=[], message="Role deleted successfully")
-
-
-# ─── Assign Permissions to Role ───────────────────────────────────────────────
 
 @router.post("/roles/{role_id}/permissions")
 async def assign_permissions_to_role(
-    role_id: int,
+    role_id: uuid.UUID,
     payload: AssignPermissionsRequest,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    role = await db.scalar(select(Role).where(Role.id == role_id))
-    if not role:
+    role_exists = await db.scalar(select(Role.id).where(Role.id == role_id))
+    if not role_exists:
         raise AppException(status_code=404, detail="Role not found", error_code="NOT_FOUND")
 
-    # Validate all permission_ids exist
     if payload.permission_ids:
-        found = await db.scalars(
-            select(Permission.id).where(Permission.id.in_(payload.permission_ids))
-        )
+        found = await db.scalars(select(Permission.id).where(Permission.id.in_(payload.permission_ids)))
         found_ids = set(found.all())
         missing = set(payload.permission_ids) - found_ids
         if missing:
-            raise AppException(
-                status_code=404,
-                detail=f"Permissions not found: {missing}",
-                error_code="PERMISSION_NOT_FOUND",
-            )
+            raise AppException(status_code=404, detail=f"Missing: {missing}", error_code="NOT_FOUND")
 
-    # Replace all existing assignments
     await db.execute(delete(RolePermission).where(RolePermission.role_id == role_id))
     for perm_id in payload.permission_ids:
         db.add(RolePermission(role_id=role_id, permission_id=perm_id))
 
     await db.flush()
-
     return ResponseModel(
         data={"role_id": role_id, "permission_ids": payload.permission_ids},
-        message=f"Assigned {len(payload.permission_ids)} permissions to role",
+        message="Permissions assigned"
     )

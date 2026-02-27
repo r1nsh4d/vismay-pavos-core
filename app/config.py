@@ -10,6 +10,14 @@ class Settings(BaseSettings):
 
     # Development (SQLite)
     DATABASE_URL: str = "sqlite+aiosqlite:///./dev.db"
+    # Add these fields so Pydantic knows to expect them
+    POSTGRES_USER: str
+    POSTGRES_PASSWORD: str
+    POSTGRES_DB: str
+    POSTGRES_HOST: str
+    POSTGRES_PORT: str
+
+
 
     # Production (PostgresSQL)
     # DATABASE_URL = "postgresql+asyncpg://user:password@localhost:5432/dbname"

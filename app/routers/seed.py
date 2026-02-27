@@ -83,6 +83,20 @@ SUPER_ADMIN = {
     "password": "Admin@1234",
 }
 
+ADMIN ={
+  "role_id": "01645920-f1d1-49d5-8d1c-b6984f600945",
+  "username": "amaanShah",
+  "first_name": "Amaan",
+  "last_name": "Shah",
+  "email": "amaancreate@gmail.com",
+  "phone": "7907236085",
+  "password": "password",
+  "is_active": True,
+  "is_verified": False,
+  "tenant_ids": ["99c19180-2cb1-4b63-8eed-6b5b4ec0395f"],
+  "district_ids": []
+}
+
 
 @router.post("/seed")
 async def run_seed(db: AsyncSession = Depends(get_db)):
