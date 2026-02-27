@@ -42,12 +42,10 @@ async def _get_user_with_relations(db: AsyncSession, user: User) -> dict:
     )
     u = result.scalar_one()
 
-    # Flatten permissions from role
     permissions = []
     if u.role and u.role.role_permissions:
         permissions = [rp.permission.code for rp in u.role.role_permissions if rp.permission]
 
-    # Flatten tenants
     user_tenants = [
         {
             "id": str(ut.id),
@@ -59,38 +57,34 @@ async def _get_user_with_relations(db: AsyncSession, user: User) -> dict:
         for ut in u.user_tenants
     ]
 
-    # Flatten districts
     user_districts = [
         {
-        "id": str(ud.id),
-        "tenant_id": str(ud.tenant_id), # Was tenantId
-        "is_active": ud.is_active,     # Was isActive
-        "tenant": {                     # This must be an object matching TenantInfo
-            "id": ud.tenant.id,
-            "name": ud.tenant.name,
-            "code": ud.tenant.code,
-        },
-    }
+            "id": str(ud.id),
+            "district_id": str(ud.district_id),
+            "is_active": ud.is_active,
+            "name": ud.district.name,
+            "state": ud.district.state,
+        }
         for ud in u.user_districts
     ]
 
     return {
-    "id": str(u.id),
-    "role_id": str(u.role_id) if u.role_id else None, # Changed roleId
-    "role": u.role.name if u.role else None,
-    "permissions": permissions,
-    "username": u.username,
-    "first_name": u.first_name, # Changed firstName
-    "last_name": u.last_name,   # Changed lastName
-    "email": u.email,
-    "phone": u.phone,
-    "is_active": u.is_active,   # Changed isActive
-    "is_verified": u.is_verified, # Changed isVerified
-    "created_at": u.created_at,  # Changed createdAt (Pydantic handles isoformat)
-    "updated_at": u.updated_at,  # Changed updatedAt
-    "user_tenants": user_tenants,   # Changed userTenants
-    "user_districts": user_districts, # Changed userDistricts
-}
+        "id": str(u.id),
+        "role_id": str(u.role_id) if u.role_id else None,
+        "role": u.role.name if u.role else None,
+        "permissions": permissions,
+        "username": u.username,
+        "first_name": u.first_name,
+        "last_name": u.last_name,
+        "email": u.email,
+        "phone": u.phone,
+        "is_active": u.is_active,
+        "is_verified": u.is_verified,
+        "created_at": u.created_at,
+        "updated_at": u.updated_at,
+        "user_tenants": user_tenants,
+        "user_districts": user_districts,
+    }
 
 # ─── Login ────────────────────────────────────────────────────────────────────
 
@@ -130,14 +124,14 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
     ))
     await db.flush()
 
-    user = await _get_user_with_relations(db, user)
+    user_data = await _get_user_with_relations(db, user)
 
     return ResponseModel(
         data={
             "access_token": access_token,
             "refresh_token": refresh_token,
             "token_type": "bearer",
-            "user": UserResponse.model_validate(user).model_dump(),
+            "user": user_data,
         },
         message="Login successful",
     )
@@ -201,8 +195,8 @@ async def me(
     current_user: User = Depends(get_current_user),
 ):
     # current_user is already fetched in dependencies.py using UUID
-    user = await _get_user_with_relations(db, current_user)
+    user_data = await _get_user_with_relations(db, current_user)
     return ResponseModel(
-        data=UserResponse.model_validate(user).model_dump(),
+        data=user_data,
         message="User profile fetched successfully",
     )
