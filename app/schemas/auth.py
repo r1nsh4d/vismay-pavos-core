@@ -1,15 +1,13 @@
-# ─── Auth ─────────────────────────────────────────────────────────────────────
 from app.schemas.base import CamelModel
 
 
+# Auth
 class LoginRequest(CamelModel):
-    login: str          # accepts email or username
+    login: str
     password: str
-
 
 class RefreshRequest(CamelModel):
     refresh_token: str
-
 
 class TokenResponse(CamelModel):
     access_token: str

@@ -1,24 +1,13 @@
-from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey,
-    String, Text, Numeric, UniqueConstraint
-)
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text, func
+from sqlalchemy.orm import relationship, Mapped, mapped_column
 
-from sqlalchemy.orm import relationship, DeclarativeBase
-
-from app.models.base import UUIDPrimaryKey, TimestampMixin, Base
+from app.models.base import BaseModel
 
 
-# ─── District ─────────────────────────────────────────────────────────────────
-
-
-class District(UUIDPrimaryKey, TimestampMixin, Base):
-    __tablename__ = "tb_district"
-
-    name = Column(String(100), nullable=False)
-    state = Column(String(100), nullable=False)
+# Districts
+class District(BaseModel):
+    __tablename__ = "districts"
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    state: Mapped[str] = mapped_column(String(255), nullable=False)
 
     user_districts = relationship("UserDistrict", back_populates="district")
-
-
-
-

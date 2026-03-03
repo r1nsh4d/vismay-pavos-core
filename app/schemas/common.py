@@ -1,83 +1,55 @@
-import uuid
-import math
+from math import ceil
 from typing import Any, Optional
-from pydantic import BaseModel, ConfigDict
+
+from app.schemas.base import CamelModel
 
 
-def to_camel(string: str) -> str:
-    parts = string.split("_")
-    return parts[0] + "".join(word.capitalize() for word in parts[1:])
-
-
-def camelize(data: Any) -> Any:
-    """
-    Recursively convert dictionary keys to camelCase.
-    Handles UUID objects by converting them to strings.
-    """
-    if isinstance(data, list):
-        return [camelize(item) for item in data]
-    elif isinstance(data, dict):
-        return {to_camel(key): camelize(value) for key, value in data.items()}
-    elif isinstance(data, uuid.UUID):
-        return str(data)  # 🔥 Ensure UUIDs become strings for the JSON
-    else:
-        return data
-
-
-class CommonResponse(BaseModel):
+class CommonResponse(CamelModel):
     success: bool = True
     message: str = "Success"
     data: Optional[Any] = None
     meta: Optional[Any] = None
 
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-        # Allows Pydantic to handle non-dict data like SQLAlchemy models
-        from_attributes=True 
-    )
 
-
-class ErrorResponse(BaseModel):
+class ErrorResponse(CamelModel):
+    success: bool = False
     status: str = "failure"
-    error_code: int
+    errorCode: int          # camelCase alias
     message: str
     error: Optional[Any] = None
 
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-        from_attributes=True
-    )
 
-
-def ResponseModel(data: Any, message: str) -> CommonResponse:
-    # Changed status to success to match the field name in CommonResponse
+def ResponseModel(data: Any, message: str = "Success") -> CommonResponse:
     return CommonResponse(
         success=True,
         message=message,
-        data=camelize(data),
+        data=data,
     )
 
 
 def ErrorResponseModel(error: Any, code: int, message: str) -> ErrorResponse:
     return ErrorResponse(
-        status="failure",
         error_code=code,
         message=message,
-        error=camelize(error),
+        error=error,
     )
 
 
-def PaginatedResponse(data: list, message: str, page: int, limit: int, total: int) -> CommonResponse:
+def PaginatedResponse(
+    data: list,
+    message: str = "Success",
+    page: int = 1,
+    limit: int = 20,
+    total: int = 0,
+) -> CommonResponse:
     return CommonResponse(
         success=True,
         message=message,
-        data=camelize(data),
+        data=data,
         meta={
             "page": page,
             "limit": limit,
             "total": total,
-            "totalPages": math.ceil(total / limit) if limit > 0 else 0,
+            "totalPages": ceil(total / limit) if limit > 0 else 0,
         },
     )

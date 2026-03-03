@@ -1,50 +1,94 @@
-import asyncio
+"""
+services/roles.py
+All role & permission-assignment business logic.
+"""
+from sqlalchemy.orm import Session
+from typing import List
+import uuid
 
-from sqlalchemy import select, update, func
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
-
-from app.core.exceptions import AppException
-from app.models import Permission
-from app.schemas.permission import PermissionResponse, PermissionCreate
+from app.models import Role, Permission, RolePermission
+from app.schemas.role import RoleCreate
 
 
-class RoleMgmt:
+# ── Queries ────────────────────────────────────────────────────────────────────
 
-    @staticmethod
-    async def get_permissions_paginated(db: AsyncSession, page: int, limit: int) -> tuple[list, int]:
-        offset = (page - 1) * limit
-        total, result = await asyncio.gather(
-            db.scalar(select(func.count()).select_from(Permission)),
-            db.execute(select(Permission).offset(offset).limit(limit)),
-        )
-        perms = [PermissionResponse.model_validate(p).model_dump() for p in result.scalars().all()]
-        return perms, total or 0
+def get_role_by_id(db: Session, role_id: uuid.UUID) -> Role | None:
+    return db.query(Role).filter(Role.id == role_id).first()
 
-    @staticmethod
-    async def get_permission_by_id(db: AsyncSession, permission_id: str):
-        perm = await db.scalar(select(Permission).where(Permission.id == permission_id))
-        if not perm:
-            return None
-        return perm
 
-    @staticmethod
-    async def create_permission(db: AsyncSession, payload: PermissionCreate) -> Permission:
-        code_exists, name_exists = await asyncio.gather(
-            db.scalar(select(Permission.id).where(Permission.code == payload.code)),
-            db.scalar(select(Permission.id).where(Permission.name == payload.name)),
-        )
+def get_role_by_name(db: Session, name: str) -> Role | None:
+    return db.query(Role).filter(Role.name == name).first()
 
-        if code_exists:
-            raise AppException(status_code=409, detail="Permission code already exists", error_code="DUPLICATE_CODE")
 
-        if name_exists:
-            raise AppException(status_code=409, detail="Permission name already exists", error_code="DUPLICATE_NAME")
+def get_all_roles(db: Session) -> List[Role]:
+    return db.query(Role).all()
 
-        perm = Permission(**payload.model_dump())
-        db.add(perm)
-        await db.flush()
-        await db.refresh(perm)
-        return perm
 
-    
+# ── Mutations ──────────────────────────────────────────────────────────────────
+
+def create_role(db: Session, role_in: RoleCreate) -> Role:
+    role = Role(name=role_in.name, description=role_in.description)
+    db.add(role)
+    db.commit()
+    db.refresh(role)
+    return role
+
+
+def update_role(db: Session, role: Role, role_in: RoleCreate) -> Role:
+    role.name = role_in.name
+    role.description = role_in.description
+    db.commit()
+    db.refresh(role)
+    return role
+
+
+def delete_role(db: Session, role: Role) -> None:
+    db.delete(role)
+    db.commit()
+
+
+# ── Permission assignment ──────────────────────────────────────────────────────
+
+def assign_permissions_to_role(
+    db: Session, role: Role, permission_ids: List[uuid.UUID]
+) -> dict:
+    existing_ids = {rp.permission_id for rp in role.role_permissions}
+    added, not_found = [], []
+
+    for pid in permission_ids:
+        if pid in existing_ids:
+            continue
+        if not db.query(Permission).filter(Permission.id == pid).first():
+            not_found.append(str(pid))
+            continue
+        db.add(RolePermission(role_id=role.id, permission_id=pid))
+        added.append(str(pid))
+
+    db.commit()
+    db.refresh(role)
+    return {"added": added, "notFound": not_found}
+
+
+def remove_permission_from_role(
+    db: Session, role_id: uuid.UUID, permission_id: uuid.UUID
+) -> bool:
+    rp = db.query(RolePermission).filter(
+        RolePermission.role_id == role_id,
+        RolePermission.permission_id == permission_id,
+    ).first()
+    if not rp:
+        return False
+    db.delete(rp)
+    db.commit()
+    return True
+
+
+# ── Serialization helper ───────────────────────────────────────────────────────
+
+def serialize_role(role: Role) -> dict:
+    return {
+        "id": role.id,
+        "name": role.name,
+        "description": role.description,
+        "permissionCodes": [rp.permission.code for rp in role.role_permissions if rp.permission],
+    }

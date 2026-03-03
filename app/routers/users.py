@@ -1,410 +1,179 @@
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+from typing import List
 import uuid
-from typing import Annotated, Any
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy import delete, func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import AppException
-from app.core.security import hash_password, verify_password
 from app.database import get_db
-from app.dependencies import get_current_user
-from app.models import RolePermission
-from app.models.district import District
-from app.models.role import Role
-from app.models.tenant import Tenant
-from app.models.user import User, UserDistrict, UserTenant
-from app.schemas.common import ResponseModel, PaginatedResponse
-from app.schemas.user import (
-    AssignDistrictsRequest,
-    AssignTenantsRequest,
-    ChangePasswordRequest,
-    UserCreate,
-    UserResponse,
-    UserUpdate,
-)
+from app.schemas.user import UserCreate, UserUpdate
+from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel
+from app.services import users as user_mgmt
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
 
-# ─── Helper ───────────────────────────────────────────────────────────────────
+# ── CRUD ───────────────────────────────────────────────────────────────────────
 
-async def _get_user_with_relations(db: AsyncSession, user_input: Any) -> User:
-    """Reload user with tenants, districts and role for response."""
-    # Logic fix: recognize UUID objects directly to avoid AttributeError
-    if isinstance(user_input, (uuid.UUID, str, int)):
-        user_id = user_input
-    else:
-        user_id = user_input.id
+@router.post("", response_model=CommonResponse)
+def create_user(user_in: UserCreate, db: Session = Depends(get_db)):
+    if user_mgmt.get_user_by_username_or_email(db, user_in.username, user_in.email):
+        return ErrorResponseModel(code=400, message="Username or email already exists", error={})
 
-    result = await db.execute(
-        select(User)
-        .options(
-            selectinload(User.role)
-                .selectinload(Role.role_permissions)
-                .selectinload(RolePermission.permission),
-            selectinload(User.user_tenants).selectinload(UserTenant.tenant),
-            selectinload(User.user_districts).selectinload(UserDistrict.district),
-        )
-        .where(User.id == user_id)
-    )
-    user_obj = result.scalar_one_or_none()
-    return user_obj
+    user = user_mgmt.create_user(db, user_in)
+    return ResponseModel(data=user_mgmt.serialize_user(user), message="User created successfully")
 
 
-# ─── List All ─────────────────────────────────────────────────────────────────
-
-@router.get("")
-async def list_users(
-    page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100),
-    tenant_id: uuid.UUID | None = Query(None),
-    district_id: uuid.UUID | None = Query(None),
-    role_id: uuid.UUID | None = Query(None),
-    is_active: bool | None = Query(None),
-    is_verified: bool | None = Query(None),
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
+@router.get("", response_model=CommonResponse)
+def list_users(
+    is_active: bool | None = None,
+    role_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID | None = None,
+    district_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
 ):
-    offset = (page - 1) * limit
-    query = select(User).options(
-        selectinload(User.role)
-        .selectinload(Role.role_permissions)
-        .selectinload(RolePermission.permission),
-        selectinload(User.user_tenants).selectinload(UserTenant.tenant),
-        selectinload(User.user_districts).selectinload(UserDistrict.district),
-    )
-    count_query = select(func.count()).select_from(User)
-
-    if tenant_id is not None:
-        query = query.join(UserTenant).where(UserTenant.tenant_id == tenant_id)
-        count_query = count_query.join(UserTenant).where(UserTenant.tenant_id == tenant_id)
-    if district_id is not None:
-        query = query.join(UserDistrict).where(UserDistrict.district_id == district_id)
-        count_query = count_query.join(UserDistrict).where(UserDistrict.district_id == district_id)
-    if role_id is not None:
-        query = query.where(User.role_id == role_id)
-        count_query = count_query.where(User.role_id == role_id)
-    if is_active is not None:
-        query = query.where(User.is_active == is_active)
-        count_query = count_query.where(User.is_active == is_active)
-    if is_verified is not None:
-        query = query.where(User.is_verified == is_verified)
-        count_query = count_query.where(User.is_verified == is_verified)
-
-    total = await db.scalar(count_query) or 0
-    result = await db.execute(query.offset(offset).limit(limit))
-    users = [UserResponse.model_validate(u).model_dump() for u in result.scalars().all()]
-
-    return PaginatedResponse(
-        data=users,
-        message="Users fetched successfully",
-        limit=limit,
-        page=page,
-        total=total
-    )
+    users = user_mgmt.get_all_users(db, is_active=is_active, role_id=role_id,
+                                    tenant_id=tenant_id, district_id=district_id)
+    return ResponseModel(data=[user_mgmt.serialize_user(u) for u in users], message="Users fetched successfully")
 
 
-# ─── Get by ID ────────────────────────────────────────────────────────────────
-
-@router.get("/{user_id}")
-async def get_user(
-    user_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
-    user = await _get_user_with_relations(db, user_id)
+@router.get("/{user_id}", response_model=CommonResponse)
+def get_user(user_id: uuid.UUID, db: Session = Depends(get_db)):
+    user = user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
-
-    return ResponseModel(
-        data=UserResponse.model_validate(user).model_dump(),
-        message="User fetched successfully",
-    )
+        return ErrorResponseModel(code=404, message="User not found", error={})
+    return ResponseModel(data=user_mgmt.serialize_user(user), message="User fetched successfully")
 
 
-# ─── Get Tenants of User ──────────────────────────────────────────────────────
-
-@router.get("/{user_id}/tenants")
-async def get_user_tenants(
-    user_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
-    if not await db.scalar(select(User.id).where(User.id == user_id)):
-        raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
-
-    result = await db.execute(
-        select(UserTenant, Tenant)
-        .join(Tenant, Tenant.id == UserTenant.tenant_id)
-        .where(UserTenant.user_id == user_id)
-    )
-    data = [
-        {
-            "user_tenant_id": ut.id,
-            "tenant_id": t.id,
-            "tenant_name": t.name,
-            "tenant_code": t.code,
-            "is_active": ut.is_active,
-        }
-        for ut, t in result.all()
-    ]
-
-    return ResponseModel(data=data, message="User tenants fetched successfully")
-
-
-# ─── Get Districts of User ────────────────────────────────────────────────────
-
-@router.get("/{user_id}/districts")
-async def get_user_districts(
-    user_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
-    if not await db.scalar(select(User.id).where(User.id == user_id)):
-        raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
-
-    result = await db.execute(
-        select(UserDistrict, District)
-        .join(District, District.id == UserDistrict.district_id)
-        .where(UserDistrict.user_id == user_id)
-    )
-    data = [
-        {
-            "user_district_id": ud.id,
-            "district_id": d.id,
-            "district_name": d.name,
-            "state": d.state,
-            "is_active": ud.is_active,
-        }
-        for ud, d in result.all()
-    ]
-
-    return ResponseModel(data=data, message="User districts fetched successfully")
-
-
-# ─── Get Role of User ─────────────────────────────────────────────────────────
-
-@router.get("/{user_id}/role")
-async def get_user_role(
-    user_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
-    user = await db.scalar(select(User).where(User.id == user_id))
+@router.put("/{user_id}", response_model=CommonResponse)
+def update_user(user_id: uuid.UUID, user_in: UserUpdate, db: Session = Depends(get_db)):
+    user = user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
+        return ErrorResponseModel(code=404, message="User not found", error={})
 
-    role = None
-    if user.role_id:
-        role = await db.scalar(select(Role).where(Role.id == user.role_id))
-
-    return ResponseModel(
-        data={
-            "user_id": user_id,
-            "role_id": user.role_id,
-            "role_name": role.name if role else None,
-        },
-        message="User role fetched successfully",
-    )
+    user = user_mgmt.update_user(db, user, user_in)
+    return ResponseModel(data=user_mgmt.serialize_user(user), message="User updated successfully")
 
 
-# ─── Create ───────────────────────────────────────────────────────────────────
-
-@router.post("", status_code=201)
-async def create_user(
-    payload: UserCreate,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
-    if await db.scalar(select(User.id).where(User.email == payload.email)):
-        raise AppException(status_code=409, detail="Email already registered", error_code="DUPLICATE_EMAIL")
-
-    if await db.scalar(select(User.id).where(User.username == payload.username)):
-        raise AppException(status_code=409, detail="Username already taken", error_code="DUPLICATE_USERNAME")
-
-    if payload.role_id:
-        if not await db.scalar(select(Role.id).where(Role.id == payload.role_id)):
-            raise AppException(status_code=404, detail="Role not found", error_code="ROLE_NOT_FOUND")
-
-    # Validate tenant_ids
-    if payload.tenant_ids:
-        found = set((await db.scalars(select(Tenant.id).where(Tenant.id.in_(payload.tenant_ids)))).all())
-        missing = set(payload.tenant_ids) - found
-        if missing:
-            raise AppException(status_code=404, detail=f"Tenants not found: {missing}", error_code="TENANT_NOT_FOUND")
-
-    # Validate district_ids
-    if payload.district_ids:
-        found = set((await db.scalars(select(District.id).where(District.id.in_(payload.district_ids)))).all())
-        missing = set(payload.district_ids) - found
-        if missing:
-            raise AppException(status_code=404, detail=f"Districts not found: {missing}", error_code="DISTRICT_NOT_FOUND")
-
-    user = User(
-        **payload.model_dump(exclude={"password", "tenant_ids", "district_ids"}),
-        password_hash=hash_password(payload.password),
-    )
-    db.add(user)
-    await db.flush()
-
-    for tid in payload.tenant_ids:
-        db.add(UserTenant(user_id=user.id, tenant_id=tid))
-    for did in payload.district_ids:
-        db.add(UserDistrict(user_id=user.id, district_id=did))
-    await db.flush()
-
-    user = await _get_user_with_relations(db, user.id)
-
-    return ResponseModel(
-        data=UserResponse.model_validate(user).model_dump(),
-        message="User created successfully",
-    )
-
-
-# ─── Update ───────────────────────────────────────────────────────────────────
-
-@router.patch("/{user_id}")
-async def update_user(
-    user_id: uuid.UUID,
-    payload: UserUpdate,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
-    user = await _get_user_with_relations(db, user_id)
+@router.delete("/{user_id}", response_model=CommonResponse)
+def delete_user(user_id: uuid.UUID, db: Session = Depends(get_db)):
+    user = user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
+        return ErrorResponseModel(code=404, message="User not found", error={})
 
-    if payload.email and payload.email != user.email:
-        if await db.scalar(select(User.id).where(User.email == payload.email, User.id != user_id)):
-            raise AppException(status_code=409, detail="Email already registered", error_code="DUPLICATE_EMAIL")
-
-    if payload.username and payload.username != user.username:
-        if await db.scalar(select(User.id).where(User.username == payload.username, User.id != user_id)):
-            raise AppException(status_code=409, detail="Username already taken", error_code="DUPLICATE_USERNAME")
-
-    if payload.role_id:
-        if not await db.scalar(select(Role.id).where(Role.id == payload.role_id)):
-            raise AppException(status_code=404, detail="Role not found", error_code="ROLE_NOT_FOUND")
-
-    for field, value in payload.model_dump(exclude_unset=True).items():
-        setattr(user, field, value)
-
-    await db.flush()
-    user = await _get_user_with_relations(db, user_id)
-
-    return ResponseModel(
-        data=UserResponse.model_validate(user).model_dump(),
-        message="User updated successfully",
-    )
+    user_mgmt.delete_user(db, user)
+    return ResponseModel(data=None, message="User deleted successfully")
 
 
-# ─── Assign / Replace Tenants ─────────────────────────────────────────────────
+# ── Role ───────────────────────────────────────────────────────────────────────
 
-@router.put("/{user_id}/tenants")
-async def assign_tenants(
-    user_id: uuid.UUID,
-    payload: AssignTenantsRequest,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
-    if not await db.scalar(select(User.id).where(User.id == user_id)):
-        raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
-
-    if payload.tenant_ids:
-        found = set((await db.scalars(select(Tenant.id).where(Tenant.id.in_(payload.tenant_ids)))).all())
-        missing = set(payload.tenant_ids) - found
-        if missing:
-            raise AppException(status_code=404, detail=f"Tenants not found: {missing}", error_code="TENANT_NOT_FOUND")
-
-    await db.execute(delete(UserTenant).where(UserTenant.user_id == user_id))
-    for tid in payload.tenant_ids:
-        db.add(UserTenant(user_id=user_id, tenant_id=tid))
-    await db.flush()
-
-    return ResponseModel(
-        data={"user_id": user_id, "tenant_ids": payload.tenant_ids},
-        message="Tenants assigned successfully",
-    )
-
-
-# ─── Assign / Replace Districts ───────────────────────────────────────────────
-
-@router.put("/{user_id}/districts")
-async def assign_districts(
-    user_id: uuid.UUID,
-    payload: AssignDistrictsRequest,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
-    if not await db.scalar(select(User.id).where(User.id == user_id)):
-        raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
-
-    if payload.district_ids:
-        found = set((await db.scalars(select(District.id).where(District.id.in_(payload.district_ids)))).all())
-        missing = set(payload.district_ids) - found
-        if missing:
-            raise AppException(status_code=404, detail=f"Districts not found: {missing}", error_code="DISTRICT_NOT_FOUND")
-
-    await db.execute(delete(UserDistrict).where(UserDistrict.user_id == user_id))
-    for did in payload.district_ids:
-        db.add(UserDistrict(user_id=user_id, district_id=did))
-    await db.flush()
-
-    return ResponseModel(
-        data={"user_id": user_id, "district_ids": payload.district_ids},
-        message="Districts assigned successfully",
-    )
-
-
-# ─── Activate / Deactivate ────────────────────────────────────────────────────
-
-@router.patch("/{user_id}/activate")
-async def activate_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
-    user = await db.scalar(select(User).where(User.id == user_id))
+@router.patch("/{user_id}/role", response_model=CommonResponse)
+def assign_role(user_id: uuid.UUID, role_id: uuid.UUID, db: Session = Depends(get_db)):
+    user = user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
-    user.is_active = True
-    await db.flush()
-    return ResponseModel(data={"id": user_id, "is_active": True}, message="User activated successfully")
+        return ErrorResponseModel(code=404, message="User not found", error={})
 
-
-@router.patch("/{user_id}/deactivate")
-async def deactivate_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
-    user = await db.scalar(select(User).where(User.id == user_id))
+    user = user_mgmt.assign_role(db, user, role_id)
     if not user:
-        raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
-    user.is_active = False
-    await db.flush()
-    return ResponseModel(data={"id": user_id, "is_active": False}, message="User deactivated successfully")
+        return ErrorResponseModel(code=404, message="Role not found", error={})
+
+    return ResponseModel(data=user_mgmt.serialize_user(user), message="Role assigned successfully")
 
 
-# ─── Change Password ──────────────────────────────────────────────────────────
-
-@router.patch("/{user_id}/change-password")
-async def change_password(
-    user_id: uuid.UUID,
-    payload: ChangePasswordRequest,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
-    user = await db.scalar(select(User).where(User.id == user_id))
+@router.delete("/{user_id}/role", response_model=CommonResponse)
+def remove_role(user_id: uuid.UUID, db: Session = Depends(get_db)):
+    user = user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
-    if not verify_password(payload.old_password, user.password_hash):
-        raise AppException(status_code=400, detail="Old password is incorrect", error_code="INVALID_PASSWORD")
-    user.password_hash = hash_password(payload.new_password)
-    await db.flush()
-    return ResponseModel(data=[], message="Password changed successfully")
+        return ErrorResponseModel(code=404, message="User not found", error={})
+
+    user = user_mgmt.remove_role(db, user)
+    return ResponseModel(data=user_mgmt.serialize_user(user), message="Role removed successfully")
 
 
-# ─── Delete ───────────────────────────────────────────────────────────────────
+# ── Tenants ────────────────────────────────────────────────────────────────────
 
-@router.delete("/{user_id}")
-async def delete_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
-    user = await db.scalar(select(User).where(User.id == user_id))
+@router.post("/{user_id}/tenants", response_model=CommonResponse)
+def assign_tenants(user_id: uuid.UUID, tenant_ids: List[uuid.UUID], db: Session = Depends(get_db)):
+    user = user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        raise AppException(status_code=404, detail="User not found", error_code="NOT_FOUND")
-    await db.delete(user)
-    await db.flush()
-    return ResponseModel(data=[], message="User deleted successfully")
+        return ErrorResponseModel(code=404, message="User not found", error={})
+
+    result = user_mgmt.assign_tenants(db, user, tenant_ids)
+    return ResponseModel(data=result, message="Tenants assigned successfully")
+
+
+@router.delete("/{user_id}/tenants/{tenant_id}", response_model=CommonResponse)
+def remove_tenant(user_id: uuid.UUID, tenant_id: uuid.UUID, db: Session = Depends(get_db)):
+    removed = user_mgmt.remove_tenant(db, user_id, tenant_id)
+    if not removed:
+        return ErrorResponseModel(code=404, message="User-Tenant assignment not found", error={})
+    return ResponseModel(data=None, message="Tenant removed from user")
+
+
+@router.patch("/{user_id}/tenants/{tenant_id}/toggle", response_model=CommonResponse)
+def toggle_user_tenant(user_id: uuid.UUID, tenant_id: uuid.UUID, db: Session = Depends(get_db)):
+    ut = user_mgmt.toggle_user_tenant(db, user_id, tenant_id)
+    if not ut:
+        return ErrorResponseModel(code=404, message="User-Tenant assignment not found", error={})
+    status = "activated" if ut.is_active else "deactivated"
+    return ResponseModel(data=None, message=f"User-Tenant {status}")
+
+
+# ── Districts ──────────────────────────────────────────────────────────────────
+
+@router.post("/{user_id}/districts", response_model=CommonResponse)
+def assign_districts(user_id: uuid.UUID, district_ids: List[uuid.UUID], db: Session = Depends(get_db)):
+    user = user_mgmt.get_user_by_id(db, user_id)
+    if not user:
+        return ErrorResponseModel(code=404, message="User not found", error={})
+
+    result = user_mgmt.assign_districts(db, user, district_ids)
+    return ResponseModel(data=result, message="Districts assigned successfully")
+
+
+@router.delete("/{user_id}/districts/{district_id}", response_model=CommonResponse)
+def remove_district(user_id: uuid.UUID, district_id: uuid.UUID, db: Session = Depends(get_db)):
+    removed = user_mgmt.remove_district(db, user_id, district_id)
+    if not removed:
+        return ErrorResponseModel(code=404, message="User-District assignment not found", error={})
+    return ResponseModel(data=None, message="District removed from user")
+
+
+@router.patch("/{user_id}/districts/{district_id}/toggle", response_model=CommonResponse)
+def toggle_user_district(user_id: uuid.UUID, district_id: uuid.UUID, db: Session = Depends(get_db)):
+    ud = user_mgmt.toggle_user_district(db, user_id, district_id)
+    if not ud:
+        return ErrorResponseModel(code=404, message="User-District assignment not found", error={})
+    status = "activated" if ud.is_active else "deactivated"
+    return ResponseModel(data=None, message=f"User-District {status}")
+
+
+# ── Status / Admin actions ─────────────────────────────────────────────────────
+
+@router.patch("/{user_id}/verify", response_model=CommonResponse)
+def verify_user(user_id: uuid.UUID, db: Session = Depends(get_db)):
+    user = user_mgmt.get_user_by_id(db, user_id)
+    if not user:
+        return ErrorResponseModel(code=404, message="User not found", error={})
+
+    user_mgmt.verify_user(db, user)
+    return ResponseModel(data=None, message="User verified successfully")
+
+
+@router.patch("/{user_id}/toggle", response_model=CommonResponse)
+def toggle_user(user_id: uuid.UUID, db: Session = Depends(get_db)):
+    user = user_mgmt.get_user_by_id(db, user_id)
+    if not user:
+        return ErrorResponseModel(code=404, message="User not found", error={})
+
+    user = user_mgmt.toggle_user_active(db, user)
+    status = "activated" if user.is_active else "deactivated"
+    return ResponseModel(data=None, message=f"User {status} successfully")
+
+
+@router.patch("/{user_id}/reset-password", response_model=CommonResponse)
+def reset_password(user_id: uuid.UUID, new_password: str, db: Session = Depends(get_db)):
+    user = user_mgmt.get_user_by_id(db, user_id)
+    if not user:
+        return ErrorResponseModel(code=404, message="User not found", error={})
+
+    user_mgmt.reset_password(db, user, new_password)
+    return ResponseModel(data=None, message="Password reset successfully")

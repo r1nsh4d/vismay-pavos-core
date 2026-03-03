@@ -1,15 +1,14 @@
-# ─── Permission ───────────────────────────────────────────────────────────────
+from typing import Optional, List
 import uuid
-from typing import Optional
 
 from app.schemas.base import CamelModel
 
 
+# Permission
 class PermissionCreate(CamelModel):
     name: str
     code: str
     description: Optional[str] = None
-
 
 class PermissionResponse(CamelModel):
     id: uuid.UUID

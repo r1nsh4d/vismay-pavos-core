@@ -1,18 +1,15 @@
-from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey,
-    String, Text, Numeric, UniqueConstraint
-)
-from sqlalchemy.orm import relationship, DeclarativeBase
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text, func
+from sqlalchemy.orm import relationship, Mapped, mapped_column
+from typing import Optional
 
-# ─── Permission ───────────────────────────────────────────────────────────────
-from app.models.base import UUIDPrimaryKey, TimestampMixin, Base
+from app.models.base import BaseModel
 
 
-class Permission(UUIDPrimaryKey, TimestampMixin, Base):
-    __tablename__ = "tb_permission"
-
-    name = Column(String(100), nullable=False)
-    code = Column(String(100), unique=True, nullable=False)  # e.g. "orders:create"
-    description = Column(Text, nullable=True)
+# Permissions
+class Permission(BaseModel):
+    __tablename__ = "permissions"
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    code: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    description: Mapped[Optional[str]] = mapped_column(Text)
 
     role_permissions = relationship("RolePermission", back_populates="permission")

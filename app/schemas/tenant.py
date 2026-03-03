@@ -1,13 +1,12 @@
-# ─── Tenant ───────────────────────────────────────────────────────────────────
 import uuid
 
 from app.schemas.base import CamelModel
 
 
+# Tenant
 class TenantCreate(CamelModel):
     name: str
     code: str
-
 
 class TenantResponse(CamelModel):
     id: uuid.UUID

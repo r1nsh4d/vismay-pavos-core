@@ -1,22 +1,19 @@
-from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey,
-    String, Text, Numeric, UniqueConstraint
-)
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship, DeclarativeBase
+import uuid
+from datetime import datetime
 
-from app.models.base import utcnow, UUIDPrimaryKey, Base
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text, func
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import relationship, Mapped, mapped_column
+
+from app.models.base import BaseModel
 
 
-# ─── Auth Token ───────────────────────────────────────────────────────────────
+# Auth table for refresh tokens
+class AuthToken(BaseModel):
+    __tablename__ = "auth_tokens"
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), unique=True)
+    refresh_token: Mapped[str] = mapped_column(String(512), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
-class AuthToken(UUIDPrimaryKey, Base):
-    __tablename__ = "tb_auth_token"
-
-    user_id = Column(UUID(as_uuid=True), ForeignKey("tb_user.id", ondelete="CASCADE"), nullable=False)
-    refresh_token = Column(Text, unique=True, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
-    expires_at = Column(DateTime(timezone=True), nullable=False)
-    is_revoked = Column(Boolean, default=False, nullable=False)
-
-    user = relationship("User", back_populates="tb_auth_token")
+    user = relationship("User", back_populates="current_token")

@@ -1,33 +1,28 @@
-from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey,
-    String, Text, Numeric, UniqueConstraint
-)
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship, DeclarativeBase
+import uuid
+from typing import List, Optional
+
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text, func
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import relationship, Mapped, mapped_column
+
+from app.models.base import BaseModel, Base
 
 
-# ─── Role ─────────────────────────────────────────────────────────────────────
-from app.models.base import UUIDPrimaryKey, Base, TimestampMixin
-
-
-class Role(UUIDPrimaryKey, TimestampMixin, Base):
-    __tablename__ = "tb_role"
-
-    name = Column(String(100), unique=True, nullable=False)  # ADMIN, DISTRIBUTOR, EXECUTIVE
-    description = Column(Text, nullable=True)
+# Roles
+class Role(BaseModel):
+    __tablename__ = "roles"
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    description: Mapped[Optional[str]] = mapped_column(Text)
 
     role_permissions = relationship("RolePermission", back_populates="role")
     users = relationship("User", back_populates="role")
 
 
-# ─── Role <-> Permission ──────────────────────────────────────────────────────
-
-class RolePermission(UUIDPrimaryKey, TimestampMixin, Base):
-    __tablename__ = "tb_role_permission"
-    __table_args__ = (UniqueConstraint("role_id", "permission_id"),)
-
-    role_id = Column(UUID(as_uuid=True), ForeignKey("tb_role.id", ondelete="CASCADE"), nullable=False)
-    permission_id = Column(UUID(as_uuid=True), ForeignKey("tb_permission.id", ondelete="CASCADE"), nullable=False)
+# Junction tables
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+    role_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("roles.id"), primary_key=True)
+    permission_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("permissions.id"), primary_key=True)
 
     role = relationship("Role", back_populates="role_permissions")
     permission = relationship("Permission", back_populates="role_permissions")
