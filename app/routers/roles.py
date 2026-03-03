@@ -9,7 +9,7 @@ from app.dependencies import get_current_user
 from app.models.permission import Permission, RolePermission
 from app.models.role import Role
 from app.schemas.common import ResponseModel, PaginatedResponse
-from app.schemas.role_permission import (
+from app.schemas.permission import (
     AssignPermissionsRequest,
     PermissionCreate,
     PermissionResponse,
@@ -18,6 +18,7 @@ from app.schemas.role_permission import (
     RoleResponse,
     RoleUpdate,
 )
+from app.services.roles import RoleMgmt
 
 router = APIRouter(tags=["Roles & Permissions"])
 
@@ -33,17 +34,14 @@ async def list_permissions(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    offset = (page - 1) * limit
-    total = await db.scalar(select(func.count()).select_from(Permission)) or 0
-    result = await db.execute(select(Permission).offset(offset).limit(limit))
-    perms = [PermissionResponse.model_validate(p).model_dump() for p in result.scalars().all()]
+    perms, total = await RoleMgmt.get_permissions_paginated(db, page, limit)
 
     return PaginatedResponse(
         data=perms,
         message="Permissions fetched successfully",
         limit=limit,
         page=page,
-        total=total
+        total=total,
     )
 
 
@@ -53,7 +51,7 @@ async def get_permission(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    perm = await db.scalar(select(Permission).where(Permission.id == permission_id))
+    perm = await RoleMgmt.get_permission_by_id(db, permission_id)
     if not perm:
         raise AppException(status_code=404, detail="Permission not found", error_code="NOT_FOUND")
     return ResponseModel(

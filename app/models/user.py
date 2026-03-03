@@ -1,80 +1,112 @@
-from __future__ import annotations
-import uuid
-from typing import TYPE_CHECKING
-
-from sqlalchemy import Boolean, ForeignKey, String, Text, TIMESTAMP, UniqueConstraint, func, text
+from sqlalchemy import (
+    Boolean, Column, DateTime, ForeignKey,
+    String, Text, Numeric, UniqueConstraint
+)
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.database import Base, pk_type
 
-if TYPE_CHECKING:
-    from app.models.tenant import Tenant
-    from app.models.district import District
-    from app.models.role import Role
-    from app.models.auth_token import AuthToken
-    from app.models.shop import Shop
+from sqlalchemy.orm import relationship, DeclarativeBase
 
+from app.models.base import UUIDPrimaryKey, TimestampMixin, Base
+# ─── User ─────────────────────────────────────────────────────────────────────
 
-class UserTenant(Base):
-    """Junction — one user can belong to many tenants"""
-    __tablename__ = "user_tenants"
-    __table_args__ = (UniqueConstraint("user_id", "tenant_id", name="uq_user_tenant"),)
+class User(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "tb_user"
 
-    # Use UUID for junction PK
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    
-    # FKs must match the parent table type (UUID)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
-    
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
-    created_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now())
+    username = Column(String(100), unique=True, nullable=False)
+    first_name = Column(String(100), nullable=False)
+    last_name = Column(String(100), nullable=True)
+    email = Column(String(255), unique=True, nullable=False)
+    phone = Column(String(20), nullable=True)
+    password_hash = Column(String(255), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_verified = Column(Boolean, default=False, nullable=False)
 
-    user: Mapped["User"] = relationship("User", back_populates="user_tenants")
-    tenant: Mapped["Tenant"] = relationship("Tenant", back_populates="user_tenants")
-
-
-class UserDistrict(Base):
-    """Junction — one user can belong to many districts"""
-    __tablename__ = "user_districts"
-    __table_args__ = (UniqueConstraint("user_id", "district_id", name="uq_user_district"),)
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    district_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("districts.id", ondelete="CASCADE"), nullable=False)
-    
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
-    created_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now())
-
-    user: Mapped["User"] = relationship("User", back_populates="user_districts")
-    district: Mapped["District"] = relationship("District", back_populates="user_districts")
-
-
-class User(Base):
-    __tablename__ = "users"
-
-    # Primary Key changed to UUID
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    
-    # Ensure role_id type matches the Role model PK (assuming it is also UUID)
-    role_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("roles.id"), nullable=True)
-
-    username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    first_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    email: Mapped[str] = mapped_column(String(150), unique=True, nullable=False)
-    phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
-
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
-    is_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
-
-    created_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now())
-    updated_at: Mapped[any] = mapped_column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    role_id = Column(UUID(as_uuid=True), ForeignKey("tb_role.id", ondelete="SET NULL"), nullable=True)
 
     # Relationships
-    role: Mapped["Role"] = relationship("Role", back_populates="users")
-    auth_tokens: Mapped[list["AuthToken"]] = relationship("AuthToken", back_populates="user", cascade="all, delete")
-    shops: Mapped[list["Shop"]] = relationship("Shop", back_populates="created_by_user")
-    user_tenants: Mapped[list["UserTenant"]] = relationship("UserTenant", back_populates="user", cascade="all, delete")
-    user_districts: Mapped[list["UserDistrict"]] = relationship("UserDistrict", back_populates="user", cascade="all, delete")
+    role = relationship("Role", back_populates="users")
+    user_tenants = relationship("UserTenant", back_populates="user", cascade="all, delete-orphan")
+    user_districts = relationship("UserDistrict", back_populates="user", cascade="all, delete-orphan")
+    auth_tokens = relationship("AuthToken", back_populates="user", cascade="all, delete-orphan")
+
+    # Role-specific profile (one of these will be populated)
+    admin_profile = relationship("AdminProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    distributor_profile = relationship("DistributorProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    executive_profile = relationship("ExecutiveProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+
+
+# ─── User <-> Tenant ──────────────────────────────────────────────────────────
+
+class UserTenant(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "tb_user_tenant"
+    __table_args__ = (UniqueConstraint("user_id", "tenant_id"),)
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("tb_user.id", ondelete="CASCADE"), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tb_tenant.id", ondelete="CASCADE"), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    user = relationship("User", back_populates="user_tenants")
+    tenant = relationship("Tenant", back_populates="user_tenants")
+
+
+# ─── User <-> District ────────────────────────────────────────────────────────
+
+class UserDistrict(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "tb_user_district"
+    __table_args__ = (UniqueConstraint("user_id", "district_id"),)
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("tb_user.id", ondelete="CASCADE"), nullable=False)
+    district_id = Column(UUID(as_uuid=True), ForeignKey("tb_district.id", ondelete="CASCADE"), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    user = relationship("User", back_populates="user_districts")
+    district = relationship("District", back_populates="user_districts")
+
+
+# ─── Admin Profile ────────────────────────────────────────────────────────────
+
+class AdminProfile(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "tb_admin"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("tb_user.id", ondelete="CASCADE"), unique=True, nullable=False)
+    department_name = Column(String(150), nullable=True)
+    address = Column(Text, nullable=True)
+    phone = Column(String(20), nullable=True)
+
+    user = relationship("User", back_populates="admin_profile")
+
+
+# ─── Distributor Profile ──────────────────────────────────────────────────────
+
+class DistributorProfile(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "tb_distributor"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("tb_user.id", ondelete="CASCADE"), unique=True, nullable=False)
+    company_name = Column(String(150), nullable=True)
+    gst = Column(String(20), nullable=True)
+    address = Column(Text, nullable=True)
+    state = Column(String(100), nullable=True)
+    pincode = Column(String(10), nullable=True)
+    taluk = Column(String(100), nullable=True)
+
+    user = relationship("User", back_populates="distributor_profile")
+
+
+# ─── Executive Profile ────────────────────────────────────────────────────────
+
+class ExecutiveProfile(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "tb_executive"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("tb_user.id", ondelete="CASCADE"), unique=True, nullable=False)
+    designation = Column(String(100), nullable=True)
+    address = Column(Text, nullable=True)
+    phone = Column(String(20), nullable=True)
+    pincode = Column(String(10), nullable=True)
+    latitude = Column(Numeric(9, 6), nullable=True)   # GPS
+    longitude = Column(Numeric(9, 6), nullable=True)  # GPS
+
+    # Reporting admin (points to a User with admin role)
+    reporting_admin_id = Column(UUID(as_uuid=True), ForeignKey("tb_user.id", ondelete="SET NULL"), nullable=True)
+    reporting_admin = relationship("User", foreign_keys=[reporting_admin_id])
+
+    user = relationship("User", back_populates="executive_profile", foreign_keys=[user_id])

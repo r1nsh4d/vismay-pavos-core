@@ -1,25 +1,15 @@
+# ─── District ─────────────────────────────────────────────────────────────────
 import uuid
-from datetime import datetime
-from pydantic import BaseModel, ConfigDict
-from typing import Optional
+
+from app.schemas.base import CamelModel
 
 
-class DistrictCreate(BaseModel):
+class DistrictCreate(CamelModel):
     name: str
-    state: Optional[str] = None
+    state: str
 
 
-class DistrictUpdate(BaseModel):
-    name: Optional[str] = None
-    state: Optional[str] = None
-
-
-class DistrictResponse(BaseModel):
-    # Changed from int to uuid.UUID
+class DistrictResponse(CamelModel):
     id: uuid.UUID
     name: str
-    state: Optional[str]
-    created_at: datetime
-
-    # Modern Pydantic v2 configuration
-    model_config = ConfigDict(from_attributes=True)
+    state: str

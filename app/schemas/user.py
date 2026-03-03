@@ -1,117 +1,130 @@
+# ─── Role-specific profiles ───────────────────────────────────────────────────
+import datetime
 import uuid
-from datetime import datetime
-from pydantic import BaseModel, EmailStr, model_validator, ConfigDict
 from typing import Optional
 
-class TenantInfo(BaseModel):
+from app.schemas.base import CamelModel
+
+
+class AdminProfileCreate(CamelModel):
+    department_name: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+
+
+class AdminProfileResponse(CamelModel):
     id: uuid.UUID
-    name: str
-    code:str
-    model_config = ConfigDict(from_attributes=True)
+    department_name: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
 
 
-class DistrictInfo(BaseModel):
+class DistributorProfileCreate(CamelModel):
+    company_name: Optional[str] = None
+    gst: Optional[str] = None
+    address: Optional[str] = None
+    state: Optional[str] = None
+    pincode: Optional[str] = None
+    taluk: Optional[str] = None
+
+
+class DistributorProfileResponse(CamelModel):
     id: uuid.UUID
-    name: str
-    model_config = ConfigDict(from_attributes=True)
+    company_name: Optional[str] = None
+    gst: Optional[str] = None
+    address: Optional[str] = None
+    state: Optional[str] = None
+    pincode: Optional[str] = None
+    taluk: Optional[str] = None
 
 
-class TenantInUser(BaseModel):
+class ExecutiveProfileCreate(CamelModel):
+    designation: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    pincode: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    reporting_admin_id: Optional[uuid.UUID] = None
+
+
+class ExecutiveProfileResponse(CamelModel):
+    id: uuid.UUID
+    designation: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    pincode: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    reporting_admin_id: Optional[uuid.UUID] = None
+
+
+# ─── User ─────────────────────────────────────────────────────────────────────
+
+class UserTenantResponse(CamelModel):
     id: uuid.UUID
     tenant_id: uuid.UUID
     is_active: bool
-    tenant: TenantInfo
-    model_config = ConfigDict(from_attributes=True)
+    name: str
+    code: str
 
 
-class DistrictInUser(BaseModel):
+class UserDistrictResponse(CamelModel):
     id: uuid.UUID
     district_id: uuid.UUID
     is_active: bool
-    district: DistrictInfo
-    model_config = ConfigDict(from_attributes=True)
+    name: str
+    state: str
 
 
-class UserCreate(BaseModel):
-    role_id: Optional[uuid.UUID] = None
+class UserCreate(CamelModel):
     username: str
     first_name: str
     last_name: Optional[str] = None
     email: EmailStr
     phone: Optional[str] = None
     password: str
-    is_active: bool = True
-    is_verified: bool = False
-    tenant_ids: list[uuid.UUID] = []    # Changed to list of UUIDs
-    district_ids: list[uuid.UUID] = []  # Changed to list of UUIDs
-
-
-class UserUpdate(BaseModel):
     role_id: Optional[uuid.UUID] = None
+    tenant_ids: list[uuid.UUID] = []
+    district_ids: list[uuid.UUID] = []
+
+    # Role-specific profile — only one should be provided
+    admin_profile: Optional[AdminProfileCreate] = None
+    distributor_profile: Optional[DistributorProfileCreate] = None
+    executive_profile: Optional[ExecutiveProfileCreate] = None
+
+
+class UserUpdate(CamelModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    email: Optional[EmailStr] = None
     phone: Optional[str] = None
-    username: Optional[str] = None
     is_active: Optional[bool] = None
-    is_verified: Optional[bool] = None
+
+    admin_profile: Optional[AdminProfileCreate] = None
+    distributor_profile: Optional[DistributorProfileCreate] = None
+    executive_profile: Optional[ExecutiveProfileCreate] = None
 
 
-class RoleInUser(BaseModel):
+class UserResponse(CamelModel):
     id: uuid.UUID
-    name: str
-    model_config = ConfigDict(from_attributes=True)
-
-
-class PermissionInfo(BaseModel):
-    id: uuid.UUID
-    name: str
-    code: str
-    model_config = ConfigDict(from_attributes=True)
-
-
-class UserResponse(BaseModel):
-    id: uuid.UUID
-    role_id: Optional[uuid.UUID]
-    role: Optional[str] = None
-    permissions: list[str] = []
     username: str
     first_name: str
-    last_name: Optional[str]
+    last_name: Optional[str] = None
     email: str
-    phone: Optional[str]
+    phone: Optional[str] = None
     is_active: bool
     is_verified: bool
     created_at: datetime
     updated_at: datetime
-    user_tenants: list[TenantInUser] = []
-    user_districts: list[DistrictInUser] = []
-    model_config = ConfigDict(from_attributes=True)
 
-    @model_validator(mode="before")
-    @classmethod
-    def extract_role_and_permissions(cls, v):
-        # We use __dict__ or getattr because 'v' is often a SQLAlchemy model instance
-        role_obj = getattr(v, "role", None)
-        if role_obj:
-            # Manually inject string values into the validation dict
-            if hasattr(v, "__dict__"):
-                v.__dict__["role"] = role_obj.name
-                if hasattr(role_obj, "role_permissions"):
-                    v.__dict__["permissions"] = [
-                        rp.permission.code for rp in role_obj.role_permissions
-                    ]
-        return v
+    role_id: Optional[uuid.UUID] = None
+    role: Optional[str] = None
+    permissions: list[str] = []
 
+    user_tenants: list[UserTenantResponse] = []
+    user_districts: list[UserDistrictResponse] = []
 
-class AssignTenantsRequest(BaseModel):
-    tenant_ids: list[uuid.UUID]
-
-
-class AssignDistrictsRequest(BaseModel):
-    district_ids: list[uuid.UUID]
-
-
-class ChangePasswordRequest(BaseModel):
-    old_password: str
-    new_password: str
+    # Only the relevant one will be populated
+    admin_profile: Optional[AdminProfileResponse] = None
+    distributor_profile: Optional[DistributorProfileResponse] = None
+    executive_profile: Optional[ExecutiveProfileResponse] = None
