@@ -2,13 +2,14 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import hash_password
-from app.database import get_db, engine, Base
+from app.core.security import AuthMgmt
+from app.database import get_db, engine
 from app.models.district import District
 from app.models.role import Role
 from app.models.tenant import Tenant
 from app.models.user import User
-from app.models.permission import Permission, RolePermission
+from app.models import Permission, RolePermission
+from app.models import Base
 
 # ── import ALL models so Base knows about them before create_all ──────────────
 from app.models import (  # noqa
@@ -135,18 +136,19 @@ async def run_seed(db: AsyncSession = Depends(get_db)):
     # ── Step 4: Seed system roles ─────────────────────────────────────────────
     role_map = {}
     for r_data in SYSTEM_ROLES:
+        # REMOVED: Role.tenant_id == None (AttributeError)
         existing = await db.scalar(
-            select(Role).where(Role.name == r_data["name"], Role.tenant_id == None)
+            select(Role).where(Role.name == r_data["name"])
         )
         if not existing:
-            role = Role(**r_data, tenant_id=None)
+            # REMOVED: tenant_id=None (TypeError)
+            role = Role(**r_data) 
             db.add(role)
             await db.flush()
             role_map[r_data["name"]] = role.id
             results["roles"].append(r_data["name"])
         else:
             role_map[r_data["name"]] = existing.id
-
     # ── Step 5: Seed all permissions ──────────────────────────────────────────
     permission_map = {}  # code → permission.id
     for p_data in ALL_PERMISSIONS:
@@ -211,7 +213,7 @@ async def run_seed(db: AsyncSession = Depends(get_db)):
             last_name=SUPER_ADMIN["last_name"],
             email=SUPER_ADMIN["email"],
             phone=SUPER_ADMIN["phone"],
-            password_hash=hash_password(SUPER_ADMIN["password"]),
+            password_hash=AuthMgmt.get_password_hash(SUPER_ADMIN["password"]),
             is_active=True,
             is_verified=True,
         ))
