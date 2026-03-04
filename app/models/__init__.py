@@ -3,7 +3,7 @@ from app.models.district import District
 from app.models.permission import Permission
 from app.models.role import Role, RolePermission
 from app.models.tenant import Tenant
-from app.models.user import User, UserTenant, UserDistrict, AdminProfile, DistributorProfile, ExecutiveProfile
+from app.models.user import User, UserTenant, UserDistrict
 from app.models.base import Base
 
 __all__ = [
@@ -17,8 +17,5 @@ __all__ = [
     "UserTenant",
     "UserDistrict",
     "AuthToken",
-    "AdminProfile",
-    "DistributorProfile",
-    "ExecutiveProfile"
 ]
 

@@ -5,7 +5,8 @@ from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 
-from app.models.base import BaseModel, Base
+from app.database import Base
+from app.models.base import BaseModel
 
 
 # Roles

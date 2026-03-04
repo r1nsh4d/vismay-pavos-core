@@ -1,4 +1,3 @@
-from sqlalchemy import BigInteger, Integer
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
@@ -29,18 +28,8 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
-# ── This is the key fix ───────────────────────────────────────────────────────
-# SQLite doesn't support BIGINT autoincrement — use Integer in dev, BigInteger in prod
 class Base(DeclarativeBase):
     pass
-
-
-# Use this instead of BigInteger for all primary keys
-def pk_type():
-    """Returns Integer for SQLite, BigInteger for PostgreSQL"""
-    if settings.DATABASE_URL.startswith("sqlite"):
-        return Integer
-    return BigInteger
 
 
 async def get_db() -> AsyncSession:

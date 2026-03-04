@@ -1,8 +1,5 @@
-"""
-services/districts.py
-All district business logic.
-"""
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from typing import List
 import uuid
 
@@ -10,37 +7,33 @@ from app.models import District
 from app.schemas.district import DistrictCreate
 
 
-# ── Queries ────────────────────────────────────────────────────────────────────
+async def get_district_by_id(db: AsyncSession, district_id: uuid.UUID) -> District | None:
+    result = await db.execute(select(District).where(District.id == district_id))
+    return result.scalar_one_or_none()
 
-def get_district_by_id(db: Session, district_id: uuid.UUID) -> District | None:
-    return db.query(District).filter(District.id == district_id).first()
 
-
-def get_all_districts(db: Session, state: str | None = None) -> List[District]:
-    query = db.query(District)
+async def get_all_districts(db: AsyncSession, state: str | None = None) -> List[District]:
+    query = select(District)
     if state:
-        query = query.filter(District.state.ilike(f"%{state}%"))
-    return query.all()
+        query = query.where(District.state.ilike(f"%{state}%"))
+    result = await db.execute(query)
+    return result.scalars().all()
 
 
-# ── Mutations ──────────────────────────────────────────────────────────────────
-
-def create_district(db: Session, dist_in: DistrictCreate) -> District:
+async def create_district(db: AsyncSession, dist_in: DistrictCreate) -> District:
     dist = District(name=dist_in.name, state=dist_in.state)
     db.add(dist)
-    db.commit()
-    db.refresh(dist)
+    await db.flush()
     return dist
 
 
-def update_district(db: Session, dist: District, dist_in: DistrictCreate) -> District:
+async def update_district(db: AsyncSession, dist: District, dist_in: DistrictCreate) -> District:
     dist.name = dist_in.name
     dist.state = dist_in.state
-    db.commit()
-    db.refresh(dist)
+    await db.flush()
     return dist
 
 
-def delete_district(db: Session, dist: District) -> None:
-    db.delete(dist)
-    db.commit()
+async def delete_district(db: AsyncSession, dist: District) -> None:
+    await db.delete(dist)
+    await db.flush()

@@ -1,72 +1,67 @@
-"""
-services/users.py
-All user business logic: CRUD, role/tenant/district assignment,
-profile_data management, verify/toggle, password reset.
-"""
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, or_
+from sqlalchemy.orm import selectinload
 from typing import List
 import uuid
 
-from app.models import User, UserTenant, UserDistrict, Tenant, District, Role, AuthToken
+from app.models import User, UserTenant, UserDistrict, Tenant, District, Role, AuthToken, RolePermission
 from app.schemas.user import UserCreate, UserUpdate, UserResponse
-from app.services.auth import AuthMgmt
+from app.core.security import AuthMgmt
+
+
+# ── User query with all relations eagerly loaded ───────────────────────────────
+
+def _user_query():
+    return select(User).options(
+        selectinload(User.role).selectinload(Role.role_permissions).selectinload(RolePermission.permission),
+        selectinload(User.user_tenants).selectinload(UserTenant.tenant),
+        selectinload(User.user_districts).selectinload(UserDistrict.district),
+    )
 
 
 # ── Queries ────────────────────────────────────────────────────────────────────
 
-def get_user_by_id(db: Session, user_id: uuid.UUID) -> User | None:
-    return db.query(User).filter(User.id == user_id).first()
+async def get_user_by_id(db: AsyncSession, user_id: uuid.UUID) -> User | None:
+    result = await db.execute(_user_query().where(User.id == user_id))
+    return result.scalar_one_or_none()
 
 
-def get_user_by_username(db: Session, username: str) -> User | None:
-    return db.query(User).filter(User.username == username).first()
+async def get_user_by_username_or_email(db: AsyncSession, username: str, email: str) -> User | None:
+    result = await db.execute(
+        select(User).where(or_(User.username == username, User.email == email))
+    )
+    return result.scalar_one_or_none()
 
 
-def get_user_by_email(db: Session, email: str) -> User | None:
-    return db.query(User).filter(User.email == email).first()
-
-
-def get_user_by_username_or_email(db: Session, username: str, email: str) -> User | None:
-    return db.query(User).filter(
-        (User.username == username) | (User.email == email)
-    ).first()
-
-
-def get_all_users(
-    db: Session,
+async def get_all_users(
+    db: AsyncSession,
     is_active: bool | None = None,
     role_id: uuid.UUID | None = None,
     tenant_id: uuid.UUID | None = None,
     district_id: uuid.UUID | None = None,
 ) -> List[User]:
-    query = db.query(User)
+    query = _user_query()
     if is_active is not None:
-        query = query.filter(User.is_active == is_active)
+        query = query.where(User.is_active == is_active)
     if role_id:
-        query = query.filter(User.role_id == role_id)
+        query = query.where(User.role_id == role_id)
     if tenant_id:
-        query = query.join(UserTenant).filter(
+        query = query.join(UserTenant).where(
             UserTenant.tenant_id == tenant_id,
             UserTenant.is_active == True,
         )
     if district_id:
-        query = query.join(UserDistrict).filter(
+        query = query.join(UserDistrict).where(
             UserDistrict.district_id == district_id,
             UserDistrict.is_active == True,
         )
-    return query.all()
+    result = await db.execute(query)
+    return result.scalars().all()
 
 
 # ── Create / Update / Delete ───────────────────────────────────────────────────
 
-def create_user(db: Session, user_in: UserCreate) -> User:
-    """
-    Creates user row + seeds tenant/district associations.
-    profile_data shape by role:
-      admin:       {"address", "designation", "department"}
-      distributor: {"address", "thaluk", "gst_number"}
-      executive:   {"address", "location", "mobile_alternate", "reporting_manager"}
-    """
+async def create_user(db: AsyncSession, user_in: UserCreate) -> User:
     user = User(
         username=user_in.username,
         first_name=user_in.first_name,
@@ -75,22 +70,20 @@ def create_user(db: Session, user_in: UserCreate) -> User:
         phone=user_in.phone,
         password_hash=AuthMgmt.get_password_hash(user_in.password),
         role_id=user_in.role_id,
-        profile_data=user_in.profile_data,
+        profile_data=user_in.profile_data if hasattr(user_in, "profile_data") else None,
         is_active=True,
         is_verified=False,
     )
     db.add(user)
-    db.flush()  # populate user.id
+    await db.flush()
 
-    _seed_tenants(db, user.id, user_in.tenant_ids)
-    _seed_districts(db, user.id, user_in.district_ids)
+    await _seed_tenants(db, user.id, user_in.tenant_ids)
+    await _seed_districts(db, user.id, user_in.district_ids)
 
-    db.commit()
-    db.refresh(user)
     return user
 
 
-def update_user(db: Session, user: User, user_in: UserUpdate) -> User:
+async def update_user(db: AsyncSession, user: User, user_in: UserUpdate) -> User:
     if user_in.first_name is not None:
         user.first_name = user_in.first_name
     if user_in.last_name is not None:
@@ -99,156 +92,150 @@ def update_user(db: Session, user: User, user_in: UserUpdate) -> User:
         user.phone = user_in.phone
     if user_in.is_active is not None:
         user.is_active = user_in.is_active
-    if user_in.profile_data is not None:
-        # Merge so partial updates don't wipe existing fields
+    if hasattr(user_in, "profile_data") and user_in.profile_data is not None:
         merged = user.profile_data or {}
         merged.update(user_in.profile_data)
         user.profile_data = merged
 
-    db.commit()
-    db.refresh(user)
+    await db.flush()
     return user
 
 
-def delete_user(db: Session, user: User) -> None:
-    db.delete(user)
-    db.commit()
+async def delete_user(db: AsyncSession, user: User) -> None:
+    await db.delete(user)
+    await db.flush()
 
 
 # ── Role ───────────────────────────────────────────────────────────────────────
 
-def assign_role(db: Session, user: User, role_id: uuid.UUID) -> User | None:
-    role = db.query(Role).filter(Role.id == role_id).first()
-    if not role:
+async def assign_role(db: AsyncSession, user: User, role_id: uuid.UUID) -> User | None:
+    result = await db.execute(select(Role).where(Role.id == role_id))
+    if not result.scalar_one_or_none():
         return None
     user.role_id = role_id
-    db.commit()
-    db.refresh(user)
+    await db.flush()
     return user
 
 
-def remove_role(db: Session, user: User) -> User:
+async def remove_role(db: AsyncSession, user: User) -> User:
     user.role_id = None
-    db.commit()
-    db.refresh(user)
+    await db.flush()
     return user
 
 
 # ── Tenants ────────────────────────────────────────────────────────────────────
 
-def assign_tenants(db: Session, user: User, tenant_ids: List[uuid.UUID]) -> dict:
+async def assign_tenants(db: AsyncSession, user: User, tenant_ids: List[uuid.UUID]) -> dict:
     existing_ids = {ut.tenant_id for ut in user.user_tenants}
     added, not_found = [], []
 
     for tid in tenant_ids:
         if tid in existing_ids:
             continue
-        if not db.query(Tenant).filter(Tenant.id == tid, Tenant.is_active == True).first():
+        result = await db.execute(
+            select(Tenant).where(Tenant.id == tid, Tenant.is_active == True)
+        )
+        if not result.scalar_one_or_none():
             not_found.append(str(tid))
             continue
         db.add(UserTenant(user_id=user.id, tenant_id=tid))
         added.append(str(tid))
 
-    db.commit()
-    db.refresh(user)
+    await db.flush()
     return {"added": added, "notFound": not_found}
 
 
-def remove_tenant(db: Session, user_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
-    ut = db.query(UserTenant).filter(
-        UserTenant.user_id == user_id,
-        UserTenant.tenant_id == tenant_id,
-    ).first()
+async def remove_tenant(db: AsyncSession, user_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
+    result = await db.execute(
+        select(UserTenant).where(UserTenant.user_id == user_id, UserTenant.tenant_id == tenant_id)
+    )
+    ut = result.scalar_one_or_none()
     if not ut:
         return False
-    db.delete(ut)
-    db.commit()
+    await db.delete(ut)
+    await db.flush()
     return True
 
 
-def toggle_user_tenant(db: Session, user_id: uuid.UUID, tenant_id: uuid.UUID) -> UserTenant | None:
-    ut = db.query(UserTenant).filter(
-        UserTenant.user_id == user_id,
-        UserTenant.tenant_id == tenant_id,
-    ).first()
+async def toggle_user_tenant(db: AsyncSession, user_id: uuid.UUID, tenant_id: uuid.UUID) -> UserTenant | None:
+    result = await db.execute(
+        select(UserTenant).where(UserTenant.user_id == user_id, UserTenant.tenant_id == tenant_id)
+    )
+    ut = result.scalar_one_or_none()
     if not ut:
         return None
     ut.is_active = not ut.is_active
-    db.commit()
+    await db.flush()
     return ut
 
 
 # ── Districts ──────────────────────────────────────────────────────────────────
 
-def assign_districts(db: Session, user: User, district_ids: List[uuid.UUID]) -> dict:
+async def assign_districts(db: AsyncSession, user: User, district_ids: List[uuid.UUID]) -> dict:
     existing_ids = {ud.district_id for ud in user.user_districts}
     added, not_found = [], []
 
     for did in district_ids:
         if did in existing_ids:
             continue
-        if not db.query(District).filter(District.id == did).first():
+        result = await db.execute(select(District).where(District.id == did))
+        if not result.scalar_one_or_none():
             not_found.append(str(did))
             continue
         db.add(UserDistrict(user_id=user.id, district_id=did))
         added.append(str(did))
 
-    db.commit()
-    db.refresh(user)
+    await db.flush()
     return {"added": added, "notFound": not_found}
 
 
-def remove_district(db: Session, user_id: uuid.UUID, district_id: uuid.UUID) -> bool:
-    ud = db.query(UserDistrict).filter(
-        UserDistrict.user_id == user_id,
-        UserDistrict.district_id == district_id,
-    ).first()
+async def remove_district(db: AsyncSession, user_id: uuid.UUID, district_id: uuid.UUID) -> bool:
+    result = await db.execute(
+        select(UserDistrict).where(UserDistrict.user_id == user_id, UserDistrict.district_id == district_id)
+    )
+    ud = result.scalar_one_or_none()
     if not ud:
         return False
-    db.delete(ud)
-    db.commit()
+    await db.delete(ud)
+    await db.flush()
     return True
 
 
-def toggle_user_district(db: Session, user_id: uuid.UUID, district_id: uuid.UUID) -> UserDistrict | None:
-    ud = db.query(UserDistrict).filter(
-        UserDistrict.user_id == user_id,
-        UserDistrict.district_id == district_id,
-    ).first()
+async def toggle_user_district(db: AsyncSession, user_id: uuid.UUID, district_id: uuid.UUID) -> UserDistrict | None:
+    result = await db.execute(
+        select(UserDistrict).where(UserDistrict.user_id == user_id, UserDistrict.district_id == district_id)
+    )
+    ud = result.scalar_one_or_none()
     if not ud:
         return None
     ud.is_active = not ud.is_active
-    db.commit()
+    await db.flush()
     return ud
 
 
 # ── Status helpers ─────────────────────────────────────────────────────────────
 
-def verify_user(db: Session, user: User) -> User:
+async def verify_user(db: AsyncSession, user: User) -> User:
     user.is_verified = True
-    db.commit()
-    db.refresh(user)
+    await db.flush()
     return user
 
 
-def toggle_user_active(db: Session, user: User) -> User:
+async def toggle_user_active(db: AsyncSession, user: User) -> User:
     user.is_active = not user.is_active
-    db.commit()
-    db.refresh(user)
+    await db.flush()
     return user
 
 
-def reset_password(db: Session, user: User, new_password: str) -> User:
+async def reset_password(db: AsyncSession, user: User, new_password: str) -> User:
     user.password_hash = AuthMgmt.get_password_hash(new_password)
-    # Invalidate any active tokens
-    token_obj = db.query(AuthToken).filter(
-        AuthToken.user_id == user.id,
-        AuthToken.is_active == True,
-    ).first()
+    result = await db.execute(
+        select(AuthToken).where(AuthToken.user_id == user.id, AuthToken.is_active == True)
+    )
+    token_obj = result.scalar_one_or_none()
     if token_obj:
         token_obj.is_active = False
-    db.commit()
-    db.refresh(user)
+    await db.flush()
     return user
 
 
@@ -268,7 +255,9 @@ def serialize_user(user: User) -> UserResponse:
         updated_at=user.updated_at,
         role_id=user.role_id,
         role_name=user.role.name if user.role else None,
-        permissions=[rp.permission.code for rp in user.role.role_permissions if rp.permission] if user.role else [],
+        permissions=[
+            rp.permission.code for rp in user.role.role_permissions if rp.permission
+        ] if user.role else [],
         user_tenants=[
             {"tenantId": str(ut.tenant_id), "tenantName": ut.tenant.name,
              "tenantCode": ut.tenant.code, "isActive": ut.is_active}
@@ -279,19 +268,23 @@ def serialize_user(user: User) -> UserResponse:
              "state": ud.district.state, "isActive": ud.is_active}
             for ud in user.user_districts if ud.district
         ],
-        profile_data=user.profile_data,
+        profile_data=user.profile_data if hasattr(user, "profile_data") else None,
     )
 
 
 # ── Private helpers ────────────────────────────────────────────────────────────
 
-def _seed_tenants(db: Session, user_id: uuid.UUID, tenant_ids: List[uuid.UUID]) -> None:
+async def _seed_tenants(db: AsyncSession, user_id: uuid.UUID, tenant_ids: List[uuid.UUID]) -> None:
     for tid in tenant_ids:
-        if db.query(Tenant).filter(Tenant.id == tid, Tenant.is_active == True).first():
+        result = await db.execute(
+            select(Tenant).where(Tenant.id == tid, Tenant.is_active == True)
+        )
+        if result.scalar_one_or_none():
             db.add(UserTenant(user_id=user_id, tenant_id=tid))
 
 
-def _seed_districts(db: Session, user_id: uuid.UUID, district_ids: List[uuid.UUID]) -> None:
+async def _seed_districts(db: AsyncSession, user_id: uuid.UUID, district_ids: List[uuid.UUID]) -> None:
     for did in district_ids:
-        if db.query(District).filter(District.id == did).first():
+        result = await db.execute(select(District).where(District.id == did))
+        if result.scalar_one_or_none():
             db.add(UserDistrict(user_id=user_id, district_id=did))

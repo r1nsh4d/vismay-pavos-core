@@ -8,11 +8,9 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     DEBUG: bool = True
 
-    # Development (SQLite)
+    # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./dev.db"
 
-    # Production (PostgresSQL)
-    # DATABASE_URL = "postgresql+asyncpg://user:password@localhost:5432/dbname"
     # JWT
     SECRET_KEY: str = "secret1"
     ALGORITHM: str = "HS256"
@@ -22,6 +20,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"  # ← this is the fix
 
 
 @lru_cache()

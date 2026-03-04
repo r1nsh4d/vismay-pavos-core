@@ -1,22 +1,20 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, or_
+from uuid import UUID
 
 from app.core.security import AuthMgmt
-from app.models import User, AuthToken
+from app.models import User, AuthToken, UserTenant, UserDistrict, Tenant, District
 from app.schemas.user import UserCreate
 
 
-# ── Register ───────────────────────────────────────────────────────────────────
+async def get_user_by_username_or_email(db: AsyncSession, username: str, email: str) -> User | None:
+    result = await db.execute(
+        select(User).where(or_(User.username == username, User.email == email))
+    )
+    return result.scalar_one_or_none()
 
-def get_user_by_username_or_email(db: Session, username: str, email: str) -> User | None:
-    return db.query(User).filter(
-        (User.username == username) | (User.email == email)
-    ).first()
 
-
-def create_user_record(db: Session, user_in: UserCreate) -> User:
-    """Creates user + assigns tenants/districts. Does NOT commit."""
-    from app.models import UserTenant, UserDistrict, Tenant, District
-
+async def create_user_record(db: AsyncSession, user_in: UserCreate) -> User:
     user = User(
         username=user_in.username,
         first_name=user_in.first_name,
@@ -25,52 +23,49 @@ def create_user_record(db: Session, user_in: UserCreate) -> User:
         phone=user_in.phone,
         password_hash=AuthMgmt.get_password_hash(user_in.password),
         role_id=user_in.role_id,
-        profile_data=user_in.profile_data,
+        profile_data=user_in.profile_data if hasattr(user_in, "profile_data") else None,
         is_active=True,
         is_verified=False,
     )
     db.add(user)
-    db.flush()  # get user.id before associations
+    await db.flush()
 
     for tenant_id in user_in.tenant_ids:
-        if db.query(Tenant).filter(Tenant.id == tenant_id, Tenant.is_active == True).first():
+        result = await db.execute(
+            select(Tenant).where(Tenant.id == tenant_id, Tenant.is_active == True)
+        )
+        if result.scalar_one_or_none():
             db.add(UserTenant(user_id=user.id, tenant_id=tenant_id))
 
     for district_id in user_in.district_ids:
-        if db.query(District).filter(District.id == district_id).first():
+        result = await db.execute(select(District).where(District.id == district_id))
+        if result.scalar_one_or_none():
             db.add(UserDistrict(user_id=user.id, district_id=district_id))
 
     return user
 
 
-# ── Login ──────────────────────────────────────────────────────────────────────
-
-def authenticate(db: Session, login: str, password: str) -> User | None:
-    return AuthMgmt.authenticate_user(db, login=login, password=password)
+async def authenticate(db: AsyncSession, login: str, password: str) -> User | None:
+    return await AuthMgmt.authenticate_user(db, login=login, password=password)
 
 
-def issue_token_pair(db: Session, user_id) -> dict:
-    """Creates and stores a fresh access+refresh token pair."""
-    access = AuthMgmt.create_access_token(db=db, user_id=user_id)
-    refresh = AuthMgmt.create_refresh_token(db=db, user_id=user_id)
-    AuthMgmt.store_refresh_token(db=db, user_id=user_id, refresh_token=refresh)
+async def issue_token_pair(db: AsyncSession, user_id: UUID) -> dict:
+    access = AuthMgmt.create_access_token(user_id=user_id)
+    refresh = AuthMgmt.create_refresh_token(user_id=user_id)
+    await AuthMgmt.store_refresh_token(db=db, user_id=user_id, refresh_token=refresh)
     return {"accessToken": access, "refreshToken": refresh, "tokenType": "bearer"}
 
 
-# ── Refresh / Logout ───────────────────────────────────────────────────────────
-
-def validate_refresh(db: Session, refresh_token: str):
-    """Returns user_id or None."""
-    return AuthMgmt.validate_refresh_token(db, refresh_token)
+async def validate_refresh(db: AsyncSession, refresh_token: str) -> UUID | None:
+    return await AuthMgmt.validate_refresh_token(db, refresh_token)
 
 
-def revoke_refresh_token(db: Session, user_id) -> bool:
-    token_obj = db.query(AuthToken).filter(
-        AuthToken.user_id == user_id,
-        AuthToken.is_active == True,
-    ).first()
+async def revoke_refresh_token(db: AsyncSession, user_id: UUID) -> bool:
+    result = await db.execute(
+        select(AuthToken).where(AuthToken.user_id == user_id, AuthToken.is_active == True)
+    )
+    token_obj = result.scalar_one_or_none()
     if not token_obj:
         return False
     token_obj.is_active = False
-    db.commit()
     return True

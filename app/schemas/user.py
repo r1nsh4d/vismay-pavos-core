@@ -13,11 +13,13 @@ class UserTenantResponse(CamelModel):
     tenant_code: str
     is_active: bool
 
+
 class UserDistrictResponse(CamelModel):
     district_id: uuid.UUID
     district_name: str
     state: str
     is_active: bool
+
 
 # User
 class UserCreate(CamelModel):
@@ -32,12 +34,14 @@ class UserCreate(CamelModel):
     district_ids: List[uuid.UUID] = []
     profile_data: Optional[dict] = None  # e.g., {"company_name": "ABC", "gst": "123"}
 
+
 class UserUpdate(CamelModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
     is_active: Optional[bool] = None
     profile_data: Optional[dict] = None
+
 
 class UserResponse(CamelModel):
     id: uuid.UUID
