@@ -5,7 +5,7 @@ import uuid
 
 from app.database import get_db
 from app.schemas.user import UserCreate, UserUpdate
-from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel
+from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel, PaginatedResponse
 from app.services import users as user_mgmt
 from app.dependencies import get_current_user, require_roles, require_permissions
 
@@ -28,12 +28,22 @@ async def list_users(
     role_id: uuid.UUID | None = None,
     tenant_id: uuid.UUID | None = None,
     district_id: uuid.UUID | None = None,
+    page: int = 1,
+    limit: int = 20,
     db: AsyncSession = Depends(get_db),
 ):
-    users = await user_mgmt.get_all_users(db, is_active=is_active, role_id=role_id,
-                                          tenant_id=tenant_id, district_id=district_id)
-    return ResponseModel(data=[user_mgmt.serialize_user(u) for u in users], message="Users fetched successfully")
-
+    users, total = await user_mgmt.get_all_users(
+        db, is_active=is_active, role_id=role_id,
+        tenant_id=tenant_id, district_id=district_id,
+        page=page, limit=limit,
+    )
+    return PaginatedResponse(
+        data=[user_mgmt.serialize_user(u) for u in users],
+        message="Users fetched successfully",
+        page=page,
+        limit=limit,
+        total=total,
+    )
 
 @router.get("/{user_id}", response_model=CommonResponse)
 async def get_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):

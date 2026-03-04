@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from typing import List
 import uuid
@@ -24,13 +24,21 @@ async def get_role_by_name(db: AsyncSession, name: str) -> Role | None:
     return result.scalar_one_or_none()
 
 
-async def get_all_roles(db: AsyncSession) -> List[Role]:
-    result = await db.execute(
-        select(Role).options(
-            selectinload(Role.role_permissions).selectinload(RolePermission.permission)
-        )
+async def get_all_roles(
+    db: AsyncSession,
+    page: int = 1,
+    limit: int = 20,
+) -> tuple[List[Role], int]:
+    query = select(Role).options(
+        selectinload(Role.role_permissions).selectinload(RolePermission.permission)
     )
-    return result.scalars().all()
+
+    total_result = await db.execute(select(func.count()).select_from(select(Role).subquery()))
+    total = total_result.scalar()
+
+    query = query.offset((page - 1) * limit).limit(limit)
+    result = await db.execute(query)
+    return result.scalars().all(), total
 
 
 # ── Mutations ──────────────────────────────────────────────────────────────────

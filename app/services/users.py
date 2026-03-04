@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 from sqlalchemy.orm import selectinload
 from typing import List
 import uuid
@@ -35,30 +35,28 @@ async def get_user_by_username_or_email(db: AsyncSession, username: str, email: 
     return result.scalar_one_or_none()
 
 
-async def get_all_users(
-    db: AsyncSession,
-    is_active: bool | None = None,
-    role_id: uuid.UUID | None = None,
-    tenant_id: uuid.UUID | None = None,
-    district_id: uuid.UUID | None = None,
-) -> List[User]:
-    query = _user_query()
+async def get_all_users(db, is_active=None, role_id=None, tenant_id=None, district_id=None, page=1, limit=20):
+    query = select(User).options(
+        selectinload(User.role).selectinload(Role.role_permissions).selectinload(RolePermission.permission),
+        selectinload(User.user_tenants).selectinload(UserTenant.tenant),
+        selectinload(User.user_districts).selectinload(UserDistrict.district),
+    )
+
     if is_active is not None:
         query = query.where(User.is_active == is_active)
     if role_id:
         query = query.where(User.role_id == role_id)
     if tenant_id:
-        query = query.join(UserTenant).where(
-            UserTenant.tenant_id == tenant_id,
-            UserTenant.is_active == True,
-        )
+        query = query.where(User.user_tenants.any(UserTenant.tenant_id == tenant_id))
     if district_id:
-        query = query.join(UserDistrict).where(
-            UserDistrict.district_id == district_id,
-            UserDistrict.is_active == True,
-        )
+        query = query.where(User.user_districts.any(UserDistrict.district_id == district_id))
+
+    total_result = await db.execute(select(func.count()).select_from(query.subquery()))
+    total = total_result.scalar()
+
+    query = query.offset((page - 1) * limit).limit(limit)
     result = await db.execute(query)
-    return result.scalars().all()
+    return result.scalars().all(), total
 
 
 # ── Create / Update / Delete ───────────────────────────────────────────────────

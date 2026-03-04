@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from typing import List
 import uuid
 
@@ -17,9 +17,19 @@ async def get_permission_by_code(db: AsyncSession, code: str) -> Permission | No
     return result.scalar_one_or_none()
 
 
-async def get_all_permissions(db: AsyncSession) -> List[Permission]:
-    result = await db.execute(select(Permission))
-    return result.scalars().all()
+async def get_all_permissions(
+    db: AsyncSession,
+    page: int = 1,
+    limit: int = 20,
+) -> tuple[List[Permission], int]:
+    query = select(Permission)
+
+    total_result = await db.execute(select(func.count()).select_from(query.subquery()))
+    total = total_result.scalar()
+
+    query = query.offset((page - 1) * limit).limit(limit)
+    result = await db.execute(query)
+    return result.scalars().all(), total
 
 
 async def create_permission(db: AsyncSession, perm_in: PermissionCreate) -> Permission:

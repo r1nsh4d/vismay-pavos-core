@@ -5,7 +5,7 @@ import uuid
 
 from app.database import get_db
 from app.dependencies import require_roles
-from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel
+from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel, PaginatedResponse
 from app.schemas.role import RoleCreate
 from app.services import roles as role_mgmt
 
@@ -22,10 +22,19 @@ async def create_role(role_in: RoleCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("", response_model=CommonResponse)
-async def list_roles(db: AsyncSession = Depends(get_db)):
-    roles = await role_mgmt.get_all_roles(db)
-    return ResponseModel(data=[role_mgmt.serialize_role(r) for r in roles], message="Roles fetched successfully")
-
+async def list_roles(
+    page: int = 1,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+):
+    roles, total = await role_mgmt.get_all_roles(db, page=page, limit=limit)
+    return PaginatedResponse(
+        data=[role_mgmt.serialize_role(r) for r in roles],
+        message="Roles fetched successfully",
+        page=page,
+        limit=limit,
+        total=total,
+    )
 
 @router.get("/{role_id}", response_model=CommonResponse)
 async def get_role(role_id: uuid.UUID, db: AsyncSession = Depends(get_db)):

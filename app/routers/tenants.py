@@ -4,7 +4,7 @@ import uuid
 
 from app.database import get_db
 from app.dependencies import get_current_user, require_roles, require_permissions
-from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel
+from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel, PaginatedResponse
 from app.schemas.tenant import TenantCreate, TenantResponse
 from app.services import tenants as tenant_mgmt
 
@@ -22,9 +22,20 @@ async def create_tenant(tenant_in: TenantCreate, db: AsyncSession = Depends(get_
 
 
 @router.get("", response_model=CommonResponse)
-async def list_tenants(is_active: bool | None = None, db: AsyncSession = Depends(get_db)):
-    tenants = await tenant_mgmt.get_all_tenants(db, is_active=is_active)
-    return ResponseModel(data=[TenantResponse.model_validate(t) for t in tenants], message="Tenants fetched")
+async def list_tenants(
+    is_active: bool | None = None,
+    page: int = 1,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+):
+    tenants, total = await tenant_mgmt.get_all_tenants(db, is_active=is_active, page=page, limit=limit)
+    return PaginatedResponse(
+        data=[TenantResponse.model_validate(t) for t in tenants],
+        message="Tenants fetched",
+        page=page,
+        limit=limit,
+        total=total,
+    )
 
 
 @router.get("/{tenant_id}", response_model=CommonResponse)

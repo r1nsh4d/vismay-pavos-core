@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from typing import List
 import uuid
 
@@ -12,12 +12,22 @@ async def get_district_by_id(db: AsyncSession, district_id: uuid.UUID) -> Distri
     return result.scalar_one_or_none()
 
 
-async def get_all_districts(db: AsyncSession, state: str | None = None) -> List[District]:
+async def get_all_districts(
+    db: AsyncSession,
+    state: str | None = None,
+    page: int = 1,
+    limit: int = 20,
+) -> tuple[List[District], int]:
     query = select(District)
     if state:
         query = query.where(District.state.ilike(f"%{state}%"))
+
+    total_result = await db.execute(select(func.count()).select_from(query.subquery()))
+    total = total_result.scalar()
+
+    query = query.offset((page - 1) * limit).limit(limit)
     result = await db.execute(query)
-    return result.scalars().all()
+    return result.scalars().all(), total
 
 
 async def create_district(db: AsyncSession, dist_in: DistrictCreate) -> District:
