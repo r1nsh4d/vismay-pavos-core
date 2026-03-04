@@ -27,9 +27,9 @@ def ResponseModel(data: Any, message: str = "Success") -> CommonResponse:
     )
 
 
-def ErrorResponseModel(error: Any, code: int, message: str) -> ErrorResponse:
+def ErrorResponseModel(code: int, message: str, error: dict):
     return ErrorResponse(
-        error_code=code,
+        errorCode=code,  # was error_code
         message=message,
         error=error,
     )

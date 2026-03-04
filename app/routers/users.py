@@ -14,12 +14,11 @@ router = APIRouter(prefix="/users", tags=["Users"], dependencies=[Depends(requir
 
 
 @router.post("", response_model=CommonResponse)
-async def create_user(
-        user_in: UserCreate,
-        db: AsyncSession = Depends(get_db)):
+async def create_user(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
     if await user_mgmt.get_user_by_username_or_email(db, user_in.username, user_in.email):
         return ErrorResponseModel(code=400, message="Username or email already exists", error={})
     user = await user_mgmt.create_user(db, user_in)
+    await db.commit()
     return ResponseModel(data=user_mgmt.serialize_user(user), message="User created successfully")
 
 

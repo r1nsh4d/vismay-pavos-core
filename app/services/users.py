@@ -28,7 +28,9 @@ async def get_user_by_id(db: AsyncSession, user_id: uuid.UUID) -> User | None:
 
 async def get_user_by_username_or_email(db: AsyncSession, username: str, email: str) -> User | None:
     result = await db.execute(
-        select(User).where(or_(User.username == username, User.email == email))
+        select(User).where(
+            (User.username == username) | (User.email == email)
+        )
     )
     return result.scalar_one_or_none()
 
@@ -80,7 +82,20 @@ async def create_user(db: AsyncSession, user_in: UserCreate) -> User:
     await _seed_tenants(db, user.id, user_in.tenant_ids)
     await _seed_districts(db, user.id, user_in.district_ids)
 
-    return user
+    result = await db.execute(
+        select(User)
+        .options(
+            selectinload(User.role)
+            .selectinload(Role.role_permissions)
+            .selectinload(RolePermission.permission),
+            selectinload(User.user_tenants)
+            .selectinload(UserTenant.tenant),
+            selectinload(User.user_districts)
+            .selectinload(UserDistrict.district),
+        )
+        .where(User.id == user.id)
+    )
+    return result.scalar_one()
 
 
 async def update_user(db: AsyncSession, user: User, user_in: UserUpdate) -> User:
