@@ -9,7 +9,7 @@ from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel
 from app.schemas.role import RoleCreate
 from app.services import roles as role_mgmt
 
-router = APIRouter(prefix="/roles", tags=["Roles"], dependencies=[Depends(require_roles("super_admin"))])
+router = APIRouter(prefix="/roles", tags=["Roles"], dependencies=[Depends(require_roles("super_admin","admin"))])
 
 
 @router.post("", response_model=CommonResponse)
