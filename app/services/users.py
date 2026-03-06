@@ -326,38 +326,24 @@ async def _seed_districts(db: AsyncSession, user_id: uuid.UUID, district_ids: Li
 
 async def search_users(
     db: AsyncSession,
-    q: str,
-    page: int = 1,
-    limit: int = 20,
-) -> tuple[List[User], int]:
-    base = _user_query().where(
-        or_(
-            User.username.ilike(f"%{q}%"),
-            User.email.ilike(f"%{q}%"),
-        )
-    )
-    total_result = await db.execute(select(func.count()).select_from(base.subquery()))
-    total = total_result.scalar()
-
-    result = await db.execute(base.offset((page - 1) * limit).limit(limit))
-    return result.scalars().all(), total
-
-
-async def filter_users_by_tenants_and_districts(
-    db: AsyncSession,
+    q: str | None = None,
     tenant_ids: List[uuid.UUID] = [],
     district_ids: List[uuid.UUID] = [],
+    role_ids: List[uuid.UUID] = [],
     is_active: bool | None = None,
-    role_id: uuid.UUID | None = None,
     page: int = 1,
     limit: int = 20,
 ) -> Tuple[List[User], int]:
     query = _user_query()
 
+    if q:
+        query = query.where(
+            or_(User.username.ilike(f"%{q}%"), User.email.ilike(f"%{q}%"))
+        )
     if is_active is not None:
         query = query.where(User.is_active == is_active)
-    if role_id:
-        query = query.where(User.role_id == role_id)
+    if role_ids:
+        query = query.where(User.role_id.in_(role_ids))
     if tenant_ids:
         query = query.where(User.user_tenants.any(UserTenant.tenant_id.in_(tenant_ids)))
     if district_ids:

@@ -16,37 +16,31 @@ router = APIRouter(prefix="/users", tags=["Users"], dependencies=[Depends(requir
 
 @router.get("/search", response_model=CommonResponse)
 async def search_users(
-    q: str = Query(..., min_length=1, description="Search by username or email"),
-    page: int = 1,
-    limit: int = 20,
-    db: AsyncSession = Depends(get_db),
-):
-    users, total = await user_mgmt.search_users(db, q=q, page=page, limit=limit)
-    return PaginatedResponse(
-        data=[user_mgmt.serialize_user(u) for u in users],
-        message="Search results fetched",
-        page=page,
-        limit=limit,
-        total=total,
-    )
-
-
-@router.get("/filter", response_model=CommonResponse)
-async def filter_users(
-    tenant_ids: List[uuid.UUID] = Query(default=[]),
-    district_ids: List[uuid.UUID] = Query(default=[]),
+    q: str | None = Query(default=None, description="Search by username or email"),
+    tenant_ids: str | None = Query(default=None, description="Comma-separated tenant UUIDs"),
+    district_ids: str | None = Query(default=None, description="Comma-separated district UUIDs"),
+    role_ids: str | None = Query(default=None, description="Comma-separated role UUIDs"),
     is_active: bool | None = None,
-    role_id: uuid.UUID | None = None,
     page: int = 1,
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
 ):
-    users, total = await user_mgmt.filter_users_by_tenants_and_districts(
+    # Parse comma-separated UUIDs
+    def parse_uuids(val: str | None) -> List[uuid.UUID]:
+        if not val:
+            return []
+        try:
+            return [uuid.UUID(v.strip()) for v in val.split(",") if v.strip()]
+        except ValueError:
+            raise AppException(status_code=400, detail="Invalid UUID in query parameter")
+
+    users, total = await user_mgmt.search_users(
         db,
-        tenant_ids=tenant_ids,
-        district_ids=district_ids,
+        q=q,
+        tenant_ids=parse_uuids(tenant_ids),
+        district_ids=parse_uuids(district_ids),
+        role_ids=parse_uuids(role_ids),
         is_active=is_active,
-        role_id=role_id,
         page=page,
         limit=limit,
     )
