@@ -6,6 +6,7 @@ from sqlalchemy import select, or_
 from uuid import UUID
 
 from app.config import settings
+from app.models import User
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -103,7 +104,6 @@ class AuthMgmt:
 
     @staticmethod
     async def authenticate_user(db: AsyncSession, login: str, password: str):
-        from app.models import User
         result = await db.execute(
             select(User).where(or_(User.username == login, User.email == login))
         )

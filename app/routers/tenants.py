@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 import uuid
 
+from app.core.exceptions import AppException
 from app.database import get_db
 from app.dependencies import get_current_user, require_roles, require_permissions
 from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel, PaginatedResponse
@@ -15,7 +16,7 @@ router = APIRouter(
 @router.post("", response_model=CommonResponse)
 async def create_tenant(tenant_in: TenantCreate, db: AsyncSession = Depends(get_db)):
     if await tenant_mgmt.get_tenant_by_code(db, tenant_in.code):
-        return ErrorResponseModel(code=400, message="Tenant code already exists", error={})
+        raise AppException(status_code=400, detail="Tenant code already exists")
 
     tenant = await tenant_mgmt.create_tenant(db, tenant_in)
     return ResponseModel(data=TenantResponse.model_validate(tenant), message="Tenant created")
@@ -42,7 +43,7 @@ async def list_tenants(
 async def get_tenant(tenant_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     tenant = await tenant_mgmt.get_tenant_by_id(db, tenant_id)
     if not tenant:
-        return ErrorResponseModel(code=404, message="Tenant not found", error={})
+        raise AppException(status_code=404, detail="Tenant not found")
     return ResponseModel(data=TenantResponse.model_validate(tenant), message="Tenant fetched")
 
 
@@ -50,11 +51,11 @@ async def get_tenant(tenant_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 async def update_tenant(tenant_id: uuid.UUID, tenant_in: TenantCreate, db: AsyncSession = Depends(get_db)):
     tenant = await tenant_mgmt.get_tenant_by_id(db, tenant_id)
     if not tenant:
-        return ErrorResponseModel(code=404, message="Tenant not found", error={})
+        raise AppException(status_code=404, detail="Tenant not found")
 
     conflict = await tenant_mgmt.get_tenant_by_code(db, tenant_in.code)
     if conflict and conflict.id != tenant_id:
-        return ErrorResponseModel(code=400, message="Tenant code already in use", error={})
+        raise AppException(status_code=400, detail="Tenant code already in use")
 
     tenant = await tenant_mgmt.update_tenant(db, tenant, tenant_in)
     return ResponseModel(data=TenantResponse.model_validate(tenant), message="Tenant updated")
@@ -64,7 +65,7 @@ async def update_tenant(tenant_id: uuid.UUID, tenant_in: TenantCreate, db: Async
 async def toggle_tenant(tenant_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     tenant = await tenant_mgmt.get_tenant_by_id(db, tenant_id)
     if not tenant:
-        return ErrorResponseModel(code=404, message="Tenant not found", error={})
+        raise AppException(status_code=404, detail="Tenant not found")
 
     tenant = await tenant_mgmt.toggle_tenant_active(db, tenant)
     status = "activated" if tenant.is_active else "deactivated"
@@ -75,7 +76,7 @@ async def toggle_tenant(tenant_id: uuid.UUID, db: AsyncSession = Depends(get_db)
 async def delete_tenant(tenant_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     tenant = await tenant_mgmt.get_tenant_by_id(db, tenant_id)
     if not tenant:
-        return ErrorResponseModel(code=404, message="Tenant not found", error={})
+        raise AppException(status_code=404, detail="Tenant not found")
 
     await tenant_mgmt.delete_tenant(db, tenant)
     return ResponseModel(data=None, message="Tenant deleted")

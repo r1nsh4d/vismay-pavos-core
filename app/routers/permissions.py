@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 import uuid
 
+from app.core.exceptions import AppException
 from app.database import get_db
 from app.dependencies import require_roles
 from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel, PaginatedResponse
@@ -14,7 +15,7 @@ router = APIRouter(prefix="/permissions", tags=["Permissions"], dependencies=[De
 @router.post("", response_model=CommonResponse)
 async def create_permission(perm_in: PermissionCreate, db: AsyncSession = Depends(get_db)):
     if await permission_mgmt.get_permission_by_code(db, perm_in.code):
-        return ErrorResponseModel(code=400, message="Permission code already exists", error={})
+        raise AppException(status_code=400, detail="Permission code already exists")
 
     perm = await permission_mgmt.create_permission(db, perm_in)
     return ResponseModel(data=PermissionResponse.model_validate(perm), message="Permission created")
@@ -40,7 +41,7 @@ async def list_permissions(
 async def get_permission(permission_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     perm = await permission_mgmt.get_permission_by_id(db, permission_id)
     if not perm:
-        return ErrorResponseModel(code=404, message="Permission not found", error={})
+        raise AppException(status_code=404, detail="Permission not found")
     return ResponseModel(data=PermissionResponse.model_validate(perm), message="Permission fetched")
 
 
@@ -48,12 +49,10 @@ async def get_permission(permission_id: uuid.UUID, db: AsyncSession = Depends(ge
 async def update_permission(permission_id: uuid.UUID, perm_in: PermissionCreate, db: AsyncSession = Depends(get_db)):
     perm = await permission_mgmt.get_permission_by_id(db, permission_id)
     if not perm:
-        return ErrorResponseModel(code=404, message="Permission not found", error={})
-
+        raise AppException(status_code=404, detail="Permission not found")
     conflict = await permission_mgmt.get_permission_by_code(db, perm_in.code)
     if conflict and conflict.id != permission_id:
-        return ErrorResponseModel(code=400, message="Permission code already in use", error={})
-
+        raise AppException(status_code=400, detail="Permission code already in use")
     perm = await permission_mgmt.update_permission(db, perm, perm_in)
     return ResponseModel(data=PermissionResponse.model_validate(perm), message="Permission updated")
 
@@ -62,7 +61,6 @@ async def update_permission(permission_id: uuid.UUID, perm_in: PermissionCreate,
 async def delete_permission(permission_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     perm = await permission_mgmt.get_permission_by_id(db, permission_id)
     if not perm:
-        return ErrorResponseModel(code=404, message="Permission not found", error={})
-
+        raise AppException(status_code=404, detail="Permission not found")
     await permission_mgmt.delete_permission(db, perm)
     return ResponseModel(data=None, message="Permission deleted")

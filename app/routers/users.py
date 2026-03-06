@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 import uuid
 
+from app.core.exceptions import AppException
 from app.database import get_db
 from app.schemas.user import UserCreate, UserUpdate
 from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel, PaginatedResponse
@@ -16,7 +17,7 @@ router = APIRouter(prefix="/users", tags=["Users"], dependencies=[Depends(requir
 @router.post("", response_model=CommonResponse)
 async def create_user(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
     if await user_mgmt.get_user_by_username_or_email(db, user_in.username, user_in.email):
-        return ErrorResponseModel(code=400, message="Username or email already exists", error={})
+        raise AppException(status_code=400, detail="Username or email already exists")
     user = await user_mgmt.create_user(db, user_in)
     await db.commit()
     return ResponseModel(data=user_mgmt.serialize_user(user), message="User created successfully")
@@ -45,11 +46,12 @@ async def list_users(
         total=total,
     )
 
+
 @router.get("/{user_id}", response_model=CommonResponse)
 async def get_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     user = await user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        return ErrorResponseModel(code=404, message="User not found", error={})
+        raise AppException(status_code=404, detail="User not found")
     return ResponseModel(data=user_mgmt.serialize_user(user), message="User fetched successfully")
 
 
@@ -57,7 +59,7 @@ async def get_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 async def update_user(user_id: uuid.UUID, user_in: UserUpdate, db: AsyncSession = Depends(get_db)):
     user = await user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        return ErrorResponseModel(code=404, message="User not found", error={})
+        raise AppException(status_code=404, detail="User not found")
     user = await user_mgmt.update_user(db, user, user_in)
     return ResponseModel(data=user_mgmt.serialize_user(user), message="User updated successfully")
 
@@ -66,7 +68,7 @@ async def update_user(user_id: uuid.UUID, user_in: UserUpdate, db: AsyncSession 
 async def delete_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     user = await user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        return ErrorResponseModel(code=404, message="User not found", error={})
+        raise AppException(status_code=404, detail="User not found")
     await user_mgmt.delete_user(db, user)
     return ResponseModel(data=None, message="User deleted successfully")
 
@@ -75,10 +77,10 @@ async def delete_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 async def assign_role(user_id: uuid.UUID, role_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     user = await user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        return ErrorResponseModel(code=404, message="User not found", error={})
+        raise AppException(status_code=404, detail="User not found")
     user = await user_mgmt.assign_role(db, user, role_id)
     if not user:
-        return ErrorResponseModel(code=404, message="Role not found", error={})
+        raise AppException(status_code=404, detail="Role not found")
     return ResponseModel(data=user_mgmt.serialize_user(user), message="Role assigned successfully")
 
 
@@ -86,7 +88,7 @@ async def assign_role(user_id: uuid.UUID, role_id: uuid.UUID, db: AsyncSession =
 async def remove_role(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     user = await user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        return ErrorResponseModel(code=404, message="User not found", error={})
+        raise AppException(status_code=404, detail="User not found")
     user = await user_mgmt.remove_role(db, user)
     return ResponseModel(data=user_mgmt.serialize_user(user), message="Role removed successfully")
 
@@ -95,7 +97,7 @@ async def remove_role(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 async def assign_tenants(user_id: uuid.UUID, tenant_ids: List[uuid.UUID], db: AsyncSession = Depends(get_db)):
     user = await user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        return ErrorResponseModel(code=404, message="User not found", error={})
+        raise AppException(status_code=404, detail="User not found")
     result = await user_mgmt.assign_tenants(db, user, tenant_ids)
     return ResponseModel(data=result, message="Tenants assigned successfully")
 
@@ -104,7 +106,7 @@ async def assign_tenants(user_id: uuid.UUID, tenant_ids: List[uuid.UUID], db: As
 async def remove_tenant(user_id: uuid.UUID, tenant_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     removed = await user_mgmt.remove_tenant(db, user_id, tenant_id)
     if not removed:
-        return ErrorResponseModel(code=404, message="User-Tenant assignment not found", error={})
+        raise AppException(status_code=404, detail="User-Tenant assignment not found")
     return ResponseModel(data=None, message="Tenant removed from user")
 
 
@@ -112,7 +114,7 @@ async def remove_tenant(user_id: uuid.UUID, tenant_id: uuid.UUID, db: AsyncSessi
 async def toggle_user_tenant(user_id: uuid.UUID, tenant_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     ut = await user_mgmt.toggle_user_tenant(db, user_id, tenant_id)
     if not ut:
-        return ErrorResponseModel(code=404, message="User-Tenant assignment not found", error={})
+        raise AppException(status_code=404, detail="User-Tenant assignment not found")
     status = "activated" if ut.is_active else "deactivated"
     return ResponseModel(data=None, message=f"User-Tenant {status}")
 
@@ -121,16 +123,16 @@ async def toggle_user_tenant(user_id: uuid.UUID, tenant_id: uuid.UUID, db: Async
 async def assign_districts(user_id: uuid.UUID, district_ids: List[uuid.UUID], db: AsyncSession = Depends(get_db)):
     user = await user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        return ErrorResponseModel(code=404, message="User not found", error={})
+        raise AppException(status_code=404, detail="User not found")
     result = await user_mgmt.assign_districts(db, user, district_ids)
     return ResponseModel(data=result, message="Districts assigned successfully")
 
 
 @router.delete("/{user_id}/districts/{district_id}", response_model=CommonResponse)
-async def remove_district(user_id: uuid.UUID, district_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    removed = await user_mgmt.remove_district(db, user_id, district_id)
+async def remove_district(user_id: uuid.UUID, district_ids: list[uuid.UUID], db: AsyncSession = Depends(get_db)):
+    removed = await user_mgmt.remove_districts(db, user_id, district_ids)
     if not removed:
-        return ErrorResponseModel(code=404, message="User-District assignment not found", error={})
+        raise AppException(status_code=404, detail="User-District assignment not found")
     return ResponseModel(data=None, message="District removed from user")
 
 
@@ -138,7 +140,7 @@ async def remove_district(user_id: uuid.UUID, district_id: uuid.UUID, db: AsyncS
 async def toggle_user_district(user_id: uuid.UUID, district_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     ud = await user_mgmt.toggle_user_district(db, user_id, district_id)
     if not ud:
-        return ErrorResponseModel(code=404, message="User-District assignment not found", error={})
+        raise AppException(status_code=404, detail="User-District assignment not found")
     status = "activated" if ud.is_active else "deactivated"
     return ResponseModel(data=None, message=f"User-District {status}")
 
@@ -147,7 +149,7 @@ async def toggle_user_district(user_id: uuid.UUID, district_id: uuid.UUID, db: A
 async def verify_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     user = await user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        return ErrorResponseModel(code=404, message="User not found", error={})
+        raise AppException(status_code=404, detail="User not found")
     await user_mgmt.verify_user(db, user)
     return ResponseModel(data=None, message="User verified successfully")
 
@@ -156,7 +158,7 @@ async def verify_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 async def toggle_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     user = await user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        return ErrorResponseModel(code=404, message="User not found", error={})
+        raise AppException(status_code=404, detail="User not found")
     user = await user_mgmt.toggle_user_active(db, user)
     status = "activated" if user.is_active else "deactivated"
     return ResponseModel(data=None, message=f"User {status} successfully")
@@ -166,6 +168,6 @@ async def toggle_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 async def reset_password(user_id: uuid.UUID, new_password: str, db: AsyncSession = Depends(get_db)):
     user = await user_mgmt.get_user_by_id(db, user_id)
     if not user:
-        return ErrorResponseModel(code=404, message="User not found", error={})
+        raise AppException(status_code=404, detail="User not found")
     await user_mgmt.reset_password(db, user, new_password)
     return ResponseModel(data=None, message="Password reset successfully")

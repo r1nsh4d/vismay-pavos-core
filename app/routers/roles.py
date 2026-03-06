@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 import uuid
 
+from app.core.exceptions import AppException
 from app.database import get_db
 from app.dependencies import require_roles
 from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel, PaginatedResponse
@@ -15,7 +16,7 @@ router = APIRouter(prefix="/roles", tags=["Roles"], dependencies=[Depends(requir
 @router.post("", response_model=CommonResponse)
 async def create_role(role_in: RoleCreate, db: AsyncSession = Depends(get_db)):
     if await role_mgmt.get_role_by_name(db, role_in.name):
-        return ErrorResponseModel(code=400, message="Role name already exists", error={})
+        raise AppException(status_code=400, detail="Role name already exists")
 
     role = await role_mgmt.create_role(db, role_in)
     return ResponseModel(data=role_mgmt.serialize_role(role), message="Role created successfully")
@@ -40,7 +41,7 @@ async def list_roles(
 async def get_role(role_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     role = await role_mgmt.get_role_by_id(db, role_id)
     if not role:
-        return ErrorResponseModel(code=404, message="Role not found", error={})
+        raise AppException(status_code=404, detail="Role not found")
     return ResponseModel(data=role_mgmt.serialize_role(role), message="Role fetched successfully")
 
 
@@ -48,7 +49,7 @@ async def get_role(role_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 async def update_role(role_id: uuid.UUID, role_in: RoleCreate, db: AsyncSession = Depends(get_db)):
     role = await role_mgmt.get_role_by_id(db, role_id)
     if not role:
-        return ErrorResponseModel(code=404, message="Role not found", error={})
+        raise AppException(status_code=404, detail="Role not found")
 
     role = await role_mgmt.update_role(db, role, role_in)
     return ResponseModel(data=role_mgmt.serialize_role(role), message="Role updated successfully")
@@ -58,7 +59,7 @@ async def update_role(role_id: uuid.UUID, role_in: RoleCreate, db: AsyncSession 
 async def delete_role(role_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     role = await role_mgmt.get_role_by_id(db, role_id)
     if not role:
-        return ErrorResponseModel(code=404, message="Role not found", error={})
+        raise AppException(status_code=404, detail="Role not found")
 
     await role_mgmt.delete_role(db, role)
     return ResponseModel(data=None, message="Role deleted successfully")
@@ -70,7 +71,7 @@ async def assign_permissions(
 ):
     role = await role_mgmt.get_role_by_id(db, role_id)
     if not role:
-        return ErrorResponseModel(code=404, message="Role not found", error={})
+        raise AppException(status_code=404, detail="Role not found")
 
     result = await role_mgmt.assign_permissions_to_role(db, role, permission_ids)
     # Re-fetch role to get updated permissions for serialization
@@ -84,5 +85,5 @@ async def remove_permission(
 ):
     removed = await role_mgmt.remove_permission_from_role(db, role_id, permission_id)
     if not removed:
-        return ErrorResponseModel(code=404, message="Permission assignment not found", error={})
+        raise AppException(status_code=404, detail="Permission assignment not found")
     return ResponseModel(data=None, message="Permission removed from role")

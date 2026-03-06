@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 import uuid
 
+from app.core.exceptions import AppException
 from app.database import get_db
 from app.dependencies import require_roles
 from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel, PaginatedResponse
@@ -33,11 +34,12 @@ async def list_districts(
         total=total,
     )
 
+
 @router.get("/{district_id}", response_model=CommonResponse)
 async def get_district(district_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     dist = await district_mgmt.get_district_by_id(db, district_id)
     if not dist:
-        return ErrorResponseModel(code=404, message="District not found", error={})
+        raise AppException(status_code=404, detail="District not found")
     return ResponseModel(data=DistrictResponse.model_validate(dist), message="District fetched")
 
 
@@ -45,8 +47,7 @@ async def get_district(district_id: uuid.UUID, db: AsyncSession = Depends(get_db
 async def update_district(district_id: uuid.UUID, dist_in: DistrictCreate, db: AsyncSession = Depends(get_db)):
     dist = await district_mgmt.get_district_by_id(db, district_id)
     if not dist:
-        return ErrorResponseModel(code=404, message="District not found", error={})
-
+        raise AppException(status_code=404, detail="District not found")
     dist = await district_mgmt.update_district(db, dist, dist_in)
     return ResponseModel(data=DistrictResponse.model_validate(dist), message="District updated")
 
@@ -55,7 +56,7 @@ async def update_district(district_id: uuid.UUID, dist_in: DistrictCreate, db: A
 async def delete_district(district_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     dist = await district_mgmt.get_district_by_id(db, district_id)
     if not dist:
-        return ErrorResponseModel(code=404, message="District not found", error={})
+        raise AppException(status_code=404, detail="District not found")
 
     await district_mgmt.delete_district(db, dist)
     return ResponseModel(data=None, message="District deleted")

@@ -1,9 +1,10 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, func
+from sqlalchemy import select, or_, func, delete
 from sqlalchemy.orm import selectinload
 from typing import List, Tuple
 import uuid
 
+from app.core.exceptions import AppException
 from app.models import (
     User, UserTenant, UserDistrict, Tenant, 
     District, Role, AuthToken, RolePermission
@@ -209,6 +210,17 @@ async def assign_districts(db: AsyncSession, user: User, district_ids: List[uuid
     return await hydrate_user(db, user.id)
 
 
+async def remove_districts(db: AsyncSession, user_id: uuid.UUID , district_ids: List[uuid.UUID]) -> User:
+    await db.execute(
+        delete(UserDistrict).where(
+            UserDistrict.user_id == user_id,
+            UserDistrict.district_id.in_(district_ids),
+        )
+    )
+    await db.flush()
+    return await hydrate_user(db, user_id)
+
+
 # ── Status helpers ─────────────────────────────────────────────────────────────
 
 async def verify_user(db: AsyncSession, user: User) -> User:
@@ -222,6 +234,20 @@ async def toggle_user_active(db: AsyncSession, user: User) -> User:
     await db.flush()
     return await hydrate_user(db, user.id)
 
+async def toggle_user_district(db: AsyncSession, user_id: uuid.UUID, district_id: uuid.UUID) -> User:
+    result = await db.execute(
+        select(UserDistrict).where(
+            UserDistrict.user_id == user_id,
+            UserDistrict.district_id == district_id,
+        )
+    )
+    user_district = result.scalar_one_or_none()
+    if not user_district:
+        raise AppException(status_code=404, detail="District not assigned to user")
+
+    user_district.is_active = not user_district.is_active
+    await db.flush()
+    return await hydrate_user(db, user_id)
 
 async def reset_password(db: AsyncSession, user: User, new_password: str) -> User:
     user.password_hash = AuthMgmt.get_password_hash(new_password)
