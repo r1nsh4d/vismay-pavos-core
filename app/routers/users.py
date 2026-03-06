@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 import uuid
@@ -12,6 +12,51 @@ from app.dependencies import get_current_user, require_roles, require_permission
 
 
 router = APIRouter(prefix="/users", tags=["Users"], dependencies=[Depends(require_roles("super_admin", "admin"))])
+
+
+@router.get("/search", response_model=CommonResponse)
+async def search_users(
+    q: str = Query(..., min_length=1, description="Search by username or email"),
+    page: int = 1,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+):
+    users, total = await user_mgmt.search_users(db, q=q, page=page, limit=limit)
+    return PaginatedResponse(
+        data=[user_mgmt.serialize_user(u) for u in users],
+        message="Search results fetched",
+        page=page,
+        limit=limit,
+        total=total,
+    )
+
+
+@router.get("/filter", response_model=CommonResponse)
+async def filter_users(
+    tenant_ids: List[uuid.UUID] = Query(default=[]),
+    district_ids: List[uuid.UUID] = Query(default=[]),
+    is_active: bool | None = None,
+    role_id: uuid.UUID | None = None,
+    page: int = 1,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+):
+    users, total = await user_mgmt.filter_users_by_tenants_and_districts(
+        db,
+        tenant_ids=tenant_ids,
+        district_ids=district_ids,
+        is_active=is_active,
+        role_id=role_id,
+        page=page,
+        limit=limit,
+    )
+    return PaginatedResponse(
+        data=[user_mgmt.serialize_user(u) for u in users],
+        message="Users fetched successfully",
+        page=page,
+        limit=limit,
+        total=total,
+    )
 
 
 @router.post("", response_model=CommonResponse)
@@ -171,3 +216,5 @@ async def reset_password(user_id: uuid.UUID, new_password: str, db: AsyncSession
         raise AppException(status_code=404, detail="User not found")
     await user_mgmt.reset_password(db, user, new_password)
     return ResponseModel(data=None, message="Password reset successfully")
+
+
