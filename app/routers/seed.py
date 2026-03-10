@@ -13,7 +13,13 @@ from app.models import (  # noqa: F401
     Tenant,
     District,
     User, UserTenant, UserDistrict,
-    AuthToken
+    AuthToken,
+    Shop,
+    Category,
+    SetType, SetTypeItem,
+    Product, ProductVariant,
+    Stock,
+    Order, OrderItem,
 )
 
 router = APIRouter(tags=["Seed"])
