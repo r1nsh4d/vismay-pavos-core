@@ -1,6 +1,6 @@
 import uuid
 from typing import List, Optional, TYPE_CHECKING
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 
@@ -31,9 +31,9 @@ class UserDistrict(Base):
     district = relationship("District", back_populates="user_districts")
 
 
-# Users with single flexible profile
 class User(BaseModel):
     __tablename__ = "users"
+
     username: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     first_name: Mapped[str] = mapped_column(String(255), nullable=False)
     last_name: Mapped[Optional[str]] = mapped_column(String(255))
@@ -44,7 +44,7 @@ class User(BaseModel):
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
 
     role_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("roles.id"))
-    profile_data: Mapped[Optional[dict]] = mapped_column(JSONB)  # Role-specific: {"company_name": "...", "gst": "..."}
+    profile_data: Mapped[Optional[dict]] = mapped_column(JSONB)
 
     role = relationship("Role", back_populates="users")
     user_tenants: Mapped[List["UserTenant"]] = relationship("UserTenant", back_populates="user")

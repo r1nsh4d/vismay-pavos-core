@@ -4,10 +4,9 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel
+from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel, PaginatedResponse
 from app.schemas.shop import ShopCreate, ShopUpdate
 from app.services import shops as shop_svc
-from app.schemas.common import PaginatedResponse
 
 router = APIRouter(prefix="/shops", tags=["Shops"])
 
@@ -23,9 +22,9 @@ def _parse_uuids(val: str | None) -> List[uuid.UUID]:
 
 @router.get("/search", response_model=CommonResponse)
 async def search_shops(
-    q: str | None = Query(default=None, description="Search by name, place, contact person"),
+    q: str | None = Query(default=None, description="Search by name, contact person"),
     district_ids: str | None = Query(default=None, description="Comma-separated district UUIDs"),
-    state: str | None = None,
+    taluk_ids: str | None = Query(default=None, description="Comma-separated taluk UUIDs"),
     is_active: bool | None = None,
     page: int = 1,
     limit: int = 20,
@@ -35,7 +34,7 @@ async def search_shops(
         db,
         q=q,
         district_ids=_parse_uuids(district_ids),
-        state=state,
+        taluk_ids=_parse_uuids(taluk_ids),
         is_active=is_active,
         page=page,
         limit=limit,

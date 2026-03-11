@@ -1,7 +1,9 @@
 from app.models.auth import AuthToken
+from app.models.states import State
 from app.models.district import District
 from app.models.permission import Permission
 from app.models.role import Role, RolePermission
+from app.models.taluk import Taluk
 from app.models.tenant import Tenant
 from app.models.shop import Shop
 from app.models.user import User, UserTenant, UserDistrict
@@ -21,6 +23,8 @@ __all__ = [
     "Role",
     "RolePermission",
     "Tenant",
+    "State",
+    "Taluk",
     "District",
     "User",
     "UserTenant",

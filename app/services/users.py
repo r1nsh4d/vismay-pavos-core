@@ -6,17 +6,17 @@ import uuid
 
 from app.core.exceptions import AppException
 from app.models import (
-    User, UserTenant, UserDistrict, Tenant, 
-    District, Role, AuthToken, RolePermission
+    User, UserTenant, UserDistrict, Tenant,
+    District, Role, AuthToken, RolePermission,
 )
+from app.models.state import State
 from app.schemas.user import UserCreate, UserUpdate, UserResponse
 from app.core.security import AuthMgmt
 
 
-# ── Private Helper: User query with all relations eagerly loaded ───────────────
+# ── Query helper ───────────────────────────────────────────────────────────────
 
 def _user_query():
-    """Defines the standard selection with all nested relationships needed for serialization."""
     return select(User).options(
         selectinload(User.role)
             .selectinload(Role.role_permissions)
@@ -24,15 +24,16 @@ def _user_query():
         selectinload(User.user_tenants)
             .selectinload(UserTenant.tenant),
         selectinload(User.user_districts)
-            .selectinload(UserDistrict.district),
+            .selectinload(UserDistrict.district)
+            .selectinload(District.state),   # ← loads state for district
     )
 
+
 async def hydrate_user(db: AsyncSession, user_id: uuid.UUID) -> User:
-    """Re-fetches a user from the DB with all relationships loaded."""
     result = await db.execute(_user_query().where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
-        raise ValueError(f"User with id {user_id} not found during hydration")
+        raise ValueError(f"User {user_id} not found during hydration")
     return user
 
 
@@ -44,7 +45,6 @@ async def get_user_by_id(db: AsyncSession, user_id: uuid.UUID) -> User | None:
 
 
 async def get_user_by_username_or_email(db: AsyncSession, username: str, email: str) -> User | None:
-    # Use standard query but filter by login credentials
     result = await db.execute(
         _user_query().where(
             (User.username == username) | (User.email == email)
@@ -53,7 +53,11 @@ async def get_user_by_username_or_email(db: AsyncSession, username: str, email: 
     return result.scalar_one_or_none()
 
 
-async def get_all_users(db: AsyncSession, is_active=None, role_id=None, tenant_id=None, district_id=None, page=1, limit=20) -> Tuple[List[User], int]:
+async def get_all_users(
+    db: AsyncSession,
+    is_active=None, role_id=None, tenant_id=None,
+    district_id=None, page=1, limit=20,
+) -> Tuple[List[User], int]:
     query = _user_query()
 
     if is_active is not None:
@@ -65,15 +69,43 @@ async def get_all_users(db: AsyncSession, is_active=None, role_id=None, tenant_i
     if district_id:
         query = query.where(User.user_districts.any(UserDistrict.district_id == district_id))
 
-    # Count logic
     total_result = await db.execute(select(func.count()).select_from(query.subquery()))
     total = total_result.scalar() or 0
 
-    # Pagination logic
     query = query.offset((page - 1) * limit).limit(limit)
     result = await db.execute(query)
-    
-    # .unique() is required when using joined/selectinload to prevent duplicate rows
+    return result.scalars().unique().all(), total
+
+
+async def search_users(
+    db: AsyncSession,
+    q: str | None = None,
+    tenant_ids: List[uuid.UUID] = [],
+    district_ids: List[uuid.UUID] = [],
+    role_ids: List[uuid.UUID] = [],
+    is_active: bool | None = None,
+    page: int = 1,
+    limit: int = 20,
+) -> Tuple[List[User], int]:
+    query = _user_query()
+
+    if q:
+        query = query.where(
+            or_(User.username.ilike(f"%{q}%"), User.email.ilike(f"%{q}%"))
+        )
+    if is_active is not None:
+        query = query.where(User.is_active == is_active)
+    if role_ids:
+        query = query.where(User.role_id.in_(role_ids))
+    if tenant_ids:
+        query = query.where(User.user_tenants.any(UserTenant.tenant_id.in_(tenant_ids)))
+    if district_ids:
+        query = query.where(User.user_districts.any(UserDistrict.district_id.in_(district_ids)))
+
+    total_result = await db.execute(select(func.count()).select_from(query.subquery()))
+    total = total_result.scalar() or 0
+
+    result = await db.execute(query.offset((page - 1) * limit).limit(limit))
     return result.scalars().unique().all(), total
 
 
@@ -88,18 +120,16 @@ async def create_user(db: AsyncSession, user_in: UserCreate) -> User:
         phone=user_in.phone,
         password_hash=AuthMgmt.get_password_hash(user_in.password),
         role_id=user_in.role_id,
-        profile_data=user_in.profile_data if hasattr(user_in, "profile_data") else None,
+        profile_data=user_in.profile_data,
         is_active=True,
         is_verified=False,
     )
     db.add(user)
     await db.flush()
 
-    # Seed intermediate tables
     await _seed_tenants(db, user.id, user_in.tenant_ids)
     await _seed_districts(db, user.id, user_in.district_ids)
 
-    # Re-fetch with all relations loaded for the final response
     return await hydrate_user(db, user.id)
 
 
@@ -112,14 +142,12 @@ async def update_user(db: AsyncSession, user: User, user_in: UserUpdate) -> User
         user.phone = user_in.phone
     if user_in.is_active is not None:
         user.is_active = user_in.is_active
-    
-    if hasattr(user_in, "profile_data") and user_in.profile_data is not None:
+    if user_in.profile_data is not None:
         merged = (user.profile_data or {}).copy()
         merged.update(user_in.profile_data)
         user.profile_data = merged
 
     await db.flush()
-    # Ensure nested data is refreshed after update
     return await hydrate_user(db, user.id)
 
 
@@ -148,13 +176,8 @@ async def remove_role(db: AsyncSession, user: User) -> User:
 # ── Tenants ────────────────────────────────────────────────────────────────────
 
 async def assign_tenants(db: AsyncSession, user: User, tenant_ids: List[uuid.UUID]) -> User:
-    # Ensure current tenants are loaded to check existence
-    if "user_tenants" not in User.get_session_state(user).unloaded:
-         existing_ids = {ut.tenant_id for ut in user.user_tenants}
-    else:
-         # If not loaded, we re-query for safety
-         res = await db.execute(select(UserTenant.tenant_id).where(UserTenant.user_id == user.id))
-         existing_ids = set(res.scalars().all())
+    res = await db.execute(select(UserTenant.tenant_id).where(UserTenant.user_id == user.id))
+    existing_ids = set(res.scalars().all())
 
     for tid in tenant_ids:
         if tid in existing_ids:
@@ -210,7 +233,7 @@ async def assign_districts(db: AsyncSession, user: User, district_ids: List[uuid
     return await hydrate_user(db, user.id)
 
 
-async def remove_districts(db: AsyncSession, user_id: uuid.UUID , district_ids: List[uuid.UUID]) -> User:
+async def remove_districts(db: AsyncSession, user_id: uuid.UUID, district_ids: List[uuid.UUID]) -> User:
     await db.execute(
         delete(UserDistrict).where(
             UserDistrict.user_id == user_id,
@@ -219,6 +242,21 @@ async def remove_districts(db: AsyncSession, user_id: uuid.UUID , district_ids: 
     )
     await db.flush()
     return await hydrate_user(db, user_id)
+
+
+async def toggle_user_district(db: AsyncSession, user_id: uuid.UUID, district_id: uuid.UUID) -> UserDistrict:
+    result = await db.execute(
+        select(UserDistrict).where(
+            UserDistrict.user_id == user_id,
+            UserDistrict.district_id == district_id,
+        )
+    )
+    ud = result.scalar_one_or_none()
+    if not ud:
+        raise AppException(status_code=404, detail="District not assigned to user")
+    ud.is_active = not ud.is_active
+    await db.flush()
+    return ud
 
 
 # ── Status helpers ─────────────────────────────────────────────────────────────
@@ -234,20 +272,6 @@ async def toggle_user_active(db: AsyncSession, user: User) -> User:
     await db.flush()
     return await hydrate_user(db, user.id)
 
-async def toggle_user_district(db: AsyncSession, user_id: uuid.UUID, district_id: uuid.UUID) -> User:
-    result = await db.execute(
-        select(UserDistrict).where(
-            UserDistrict.user_id == user_id,
-            UserDistrict.district_id == district_id,
-        )
-    )
-    user_district = result.scalar_one_or_none()
-    if not user_district:
-        raise AppException(status_code=404, detail="District not assigned to user")
-
-    user_district.is_active = not user_district.is_active
-    await db.flush()
-    return await hydrate_user(db, user_id)
 
 async def reset_password(db: AsyncSession, user: User, new_password: str) -> User:
     user.password_hash = AuthMgmt.get_password_hash(new_password)
@@ -264,9 +288,6 @@ async def reset_password(db: AsyncSession, user: User, new_password: str) -> Use
 # ── Serialization ──────────────────────────────────────────────────────────────
 
 def serialize_user(user: User) -> UserResponse:
-    """Synchronous serialization of the user model. 
-    Assumes all relationships have been 'hydrated' via selectinload.
-    """
     return UserResponse(
         id=user.id,
         username=user.username,
@@ -281,28 +302,30 @@ def serialize_user(user: User) -> UserResponse:
         role_id=user.role_id,
         role_name=user.role.name if user.role else None,
         permissions=[
-            rp.permission.code for rp in (user.role.role_permissions if user.role else []) 
+            rp.permission.code
+            for rp in (user.role.role_permissions if user.role else [])
             if rp.permission
         ],
         user_tenants=[
             {
-                "tenantId": str(ut.tenant_id), 
+                "tenantId": str(ut.tenant_id),
                 "tenantName": ut.tenant.name if ut.tenant else "Unknown",
-                "tenantCode": ut.tenant.code if ut.tenant else "N/A", 
-                "isActive": ut.is_active
+                "tenantCode": ut.tenant.code if ut.tenant else "N/A",
+                "isActive": ut.is_active,
             }
             for ut in (user.user_tenants or [])
         ],
         user_districts=[
             {
-                "districtId": str(ud.district_id), 
+                "districtId": str(ud.district_id),
                 "districtName": ud.district.name if ud.district else "Unknown",
-                "state": ud.district.state if ud.district else "N/A", 
-                "isActive": ud.is_active
+                "stateName": ud.district.state.name if ud.district and ud.district.state else None,
+                "stateCode": ud.district.state.code if ud.district and ud.district.state else None,
+                "isActive": ud.is_active,
             }
             for ud in (user.user_districts or [])
         ],
-        profile_data=user.profile_data if hasattr(user, "profile_data") else None,
+        profile_data=user.profile_data,
     )
 
 
@@ -322,35 +345,3 @@ async def _seed_districts(db: AsyncSession, user_id: uuid.UUID, district_ids: Li
         result = await db.execute(select(District).where(District.id == did))
         if result.scalar_one_or_none():
             db.add(UserDistrict(user_id=user_id, district_id=did))
-
-
-async def search_users(
-    db: AsyncSession,
-    q: str | None = None,
-    tenant_ids: List[uuid.UUID] = [],
-    district_ids: List[uuid.UUID] = [],
-    role_ids: List[uuid.UUID] = [],
-    is_active: bool | None = None,
-    page: int = 1,
-    limit: int = 20,
-) -> Tuple[List[User], int]:
-    query = _user_query()
-
-    if q:
-        query = query.where(
-            or_(User.username.ilike(f"%{q}%"), User.email.ilike(f"%{q}%"))
-        )
-    if is_active is not None:
-        query = query.where(User.is_active == is_active)
-    if role_ids:
-        query = query.where(User.role_id.in_(role_ids))
-    if tenant_ids:
-        query = query.where(User.user_tenants.any(UserTenant.tenant_id.in_(tenant_ids)))
-    if district_ids:
-        query = query.where(User.user_districts.any(UserDistrict.district_id.in_(district_ids)))
-
-    total_result = await db.execute(select(func.count()).select_from(query.subquery()))
-    total = total_result.scalar() or 0
-
-    result = await db.execute(query.offset((page - 1) * limit).limit(limit))
-    return result.scalars().unique().all(), total

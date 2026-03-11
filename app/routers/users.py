@@ -6,12 +6,23 @@ import uuid
 from app.core.exceptions import AppException
 from app.database import get_db
 from app.schemas.user import UserCreate, UserUpdate
-from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel, PaginatedResponse
+from app.schemas.common import CommonResponse, ResponseModel, PaginatedResponse
 from app.services import users as user_mgmt
-from app.dependencies import get_current_user, require_roles, require_permissions
+from app.dependencies import require_roles
+
+router = APIRouter(
+    prefix="/users", tags=["Users"],
+    dependencies=[Depends(require_roles("super_admin", "admin"))]
+)
 
 
-router = APIRouter(prefix="/users", tags=["Users"], dependencies=[Depends(require_roles("super_admin", "admin"))])
+def _parse_uuids(val: str | None) -> List[uuid.UUID]:
+    if not val:
+        return []
+    try:
+        return [uuid.UUID(v.strip()) for v in val.split(",") if v.strip()]
+    except ValueError:
+        raise AppException(status_code=400, detail="Invalid UUID in query parameter")
 
 
 @router.get("/search", response_model=CommonResponse)
@@ -25,21 +36,12 @@ async def search_users(
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
 ):
-    # Parse comma-separated UUIDs
-    def parse_uuids(val: str | None) -> List[uuid.UUID]:
-        if not val:
-            return []
-        try:
-            return [uuid.UUID(v.strip()) for v in val.split(",") if v.strip()]
-        except ValueError:
-            raise AppException(status_code=400, detail="Invalid UUID in query parameter")
-
     users, total = await user_mgmt.search_users(
         db,
         q=q,
-        tenant_ids=parse_uuids(tenant_ids),
-        district_ids=parse_uuids(district_ids),
-        role_ids=parse_uuids(role_ids),
+        tenant_ids=_parse_uuids(tenant_ids),
+        district_ids=_parse_uuids(district_ids),
+        role_ids=_parse_uuids(role_ids),
         is_active=is_active,
         page=page,
         limit=limit,
@@ -47,9 +49,7 @@ async def search_users(
     return PaginatedResponse(
         data=[user_mgmt.serialize_user(u) for u in users],
         message="Users fetched successfully",
-        page=page,
-        limit=limit,
-        total=total,
+        page=page, limit=limit, total=total,
     )
 
 
@@ -58,7 +58,6 @@ async def create_user(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
     if await user_mgmt.get_user_by_username_or_email(db, user_in.username, user_in.email):
         raise AppException(status_code=400, detail="Username or email already exists")
     user = await user_mgmt.create_user(db, user_in)
-    await db.commit()
     return ResponseModel(data=user_mgmt.serialize_user(user), message="User created successfully")
 
 
@@ -80,9 +79,7 @@ async def list_users(
     return PaginatedResponse(
         data=[user_mgmt.serialize_user(u) for u in users],
         message="Users fetched successfully",
-        page=page,
-        limit=limit,
-        total=total,
+        page=page, limit=limit, total=total,
     )
 
 
@@ -137,8 +134,8 @@ async def assign_tenants(user_id: uuid.UUID, tenant_ids: List[uuid.UUID], db: As
     user = await user_mgmt.get_user_by_id(db, user_id)
     if not user:
         raise AppException(status_code=404, detail="User not found")
-    result = await user_mgmt.assign_tenants(db, user, tenant_ids)
-    return ResponseModel(data=result, message="Tenants assigned successfully")
+    user = await user_mgmt.assign_tenants(db, user, tenant_ids)
+    return ResponseModel(data=user_mgmt.serialize_user(user), message="Tenants assigned successfully")
 
 
 @router.delete("/{user_id}/tenants/{tenant_id}", response_model=CommonResponse)
@@ -163,13 +160,13 @@ async def assign_districts(user_id: uuid.UUID, district_ids: List[uuid.UUID], db
     user = await user_mgmt.get_user_by_id(db, user_id)
     if not user:
         raise AppException(status_code=404, detail="User not found")
-    result = await user_mgmt.assign_districts(db, user, district_ids)
-    return ResponseModel(data=result, message="Districts assigned successfully")
+    user = await user_mgmt.assign_districts(db, user, district_ids)
+    return ResponseModel(data=user_mgmt.serialize_user(user), message="Districts assigned successfully")
 
 
 @router.delete("/{user_id}/districts/{district_id}", response_model=CommonResponse)
-async def remove_district(user_id: uuid.UUID, district_ids: list[uuid.UUID], db: AsyncSession = Depends(get_db)):
-    removed = await user_mgmt.remove_districts(db, user_id, district_ids)
+async def remove_district(user_id: uuid.UUID, district_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    removed = await user_mgmt.remove_districts(db, user_id, [district_id])
     if not removed:
         raise AppException(status_code=404, detail="User-District assignment not found")
     return ResponseModel(data=None, message="District removed from user")
@@ -178,8 +175,6 @@ async def remove_district(user_id: uuid.UUID, district_ids: list[uuid.UUID], db:
 @router.patch("/{user_id}/districts/{district_id}/toggle", response_model=CommonResponse)
 async def toggle_user_district(user_id: uuid.UUID, district_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     ud = await user_mgmt.toggle_user_district(db, user_id, district_id)
-    if not ud:
-        raise AppException(status_code=404, detail="User-District assignment not found")
     status = "activated" if ud.is_active else "deactivated"
     return ResponseModel(data=None, message=f"User-District {status}")
 
@@ -210,5 +205,3 @@ async def reset_password(user_id: uuid.UUID, new_password: str, db: AsyncSession
         raise AppException(status_code=404, detail="User not found")
     await user_mgmt.reset_password(db, user, new_password)
     return ResponseModel(data=None, message="Password reset successfully")
-
-
