@@ -9,6 +9,7 @@ class RoleCreate(CamelModel):
     name: str
     description: Optional[str] = None
 
+
 class RoleResponse(CamelModel):
     id: uuid.UUID
     name: str

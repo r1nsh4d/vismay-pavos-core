@@ -23,6 +23,7 @@ def _parse_uuids(val: str | None) -> List[uuid.UUID]:
 @router.get("/search", response_model=CommonResponse)
 async def search_shops(
     q: str | None = Query(default=None, description="Search by name, contact person"),
+    state_ids: str | None = Query(default=None, description="Comma-separated state UUIDs"),
     district_ids: str | None = Query(default=None, description="Comma-separated district UUIDs"),
     taluk_ids: str | None = Query(default=None, description="Comma-separated taluk UUIDs"),
     is_active: bool | None = None,
@@ -33,6 +34,7 @@ async def search_shops(
     shops, total = await shop_svc.search_shops(
         db,
         q=q,
+        state_ids=_parse_uuids(state_ids),
         district_ids=_parse_uuids(district_ids),
         taluk_ids=_parse_uuids(taluk_ids),
         is_active=is_active,
@@ -42,9 +44,7 @@ async def search_shops(
     return PaginatedResponse(
         data=[shop_svc.serialize_shop(s) for s in shops],
         message="Shops fetched successfully",
-        page=page,
-        limit=limit,
-        total=total,
+        page=page, limit=limit, total=total,
     )
 
 

@@ -4,25 +4,31 @@ from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.models import State
 from app.models.shop import Shop
-from app.schemas.shop import ShopCreate, ShopUpdate, ShopResponse
+from app.models.district import District
+from app.schemas.shop import ShopCreate, ShopUpdate
 
 
 def _shop_query():
-    return select(Shop).options(selectinload(Shop.district))
+    return select(Shop).options(
+        selectinload(Shop.district).selectinload(District.state),
+        selectinload(Shop.taluk),
+    )
 
 
-async def get_shop_by_id(db: AsyncSession, shop_id: uuid.UUID) -> Shop | None:
+async def get_shop_by_id(db: AsyncSession, shop_id: uuid.UUID) -> Optional[Shop]:
     result = await db.execute(_shop_query().where(Shop.id == shop_id))
     return result.scalar_one_or_none()
 
 
 async def search_shops(
     db: AsyncSession,
-    q: str | None = None,
+    q: Optional[str] = None,
     district_ids: List[uuid.UUID] = [],
-    state: str | None = None,
-    is_active: bool | None = None,
+    taluk_ids: List[uuid.UUID] = [],
+    state_ids: List[uuid.UUID] = [],
+    is_active: Optional[bool] = None,
     page: int = 1,
     limit: int = 20,
 ) -> Tuple[List[Shop], int]:
@@ -32,14 +38,15 @@ async def search_shops(
         query = query.where(
             or_(
                 Shop.name.ilike(f"%{q}%"),
-                Shop.place.ilike(f"%{q}%"),
                 Shop.contact_person.ilike(f"%{q}%"),
             )
         )
+    if state_ids:
+        query = query.join(Shop.district).where(District.state_id.in_(state_ids))
     if district_ids:
         query = query.where(Shop.district_id.in_(district_ids))
-    if state:
-        query = query.where(Shop.state.ilike(f"%{state}%"))
+    if taluk_ids:
+        query = query.where(Shop.taluk_id.in_(taluk_ids))
     if is_active is not None:
         query = query.where(Shop.is_active == is_active)
 
@@ -47,23 +54,54 @@ async def search_shops(
     total = total_result.scalar() or 0
 
     result = await db.execute(query.offset((page - 1) * limit).limit(limit))
-    return result.scalars().all(), total
+    return result.scalars().unique().all(), total
 
 
-async def create_shop(db: AsyncSession, shop_in: ShopCreate) -> Shop:
-    shop = Shop(**shop_in.model_dump())
+async def _build_address(db: AsyncSession, address: dict) -> dict:
+    """Auto-populate state_name and state_code from state_id if not provided."""
+    if not address:
+        return address
+
+    state_id = address.get("state_id")
+    if state_id and not address.get("state_name"):
+        state = await db.scalar(
+            select(State).where(State.id == uuid.UUID(str(state_id)))
+        )
+        if state:
+            address["state_name"] = state.name
+            address["state_code"] = state.code
+
+    if state_id:
+        address["state_id"] = str(state_id)
+
+    return address
+
+
+async def create_shop(db: AsyncSession, data: ShopCreate) -> Shop:
+    payload = data.model_dump()
+
+    if payload.get("address"):
+        payload["address"] = await _build_address(db, dict(payload["address"]))
+
+    shop = Shop(**payload)
     db.add(shop)
     await db.flush()
-    result = await db.execute(_shop_query().where(Shop.id == shop.id))
-    return result.scalar_one()
+    return await get_shop_by_id(db, shop.id)
 
 
-async def update_shop(db: AsyncSession, shop: Shop, shop_in: ShopUpdate) -> Shop:
-    for field, value in shop_in.model_dump(exclude_unset=True).items():
+async def update_shop(db: AsyncSession, shop: Shop, data: ShopUpdate) -> Shop:
+    payload = data.model_dump(exclude_unset=True)
+
+    if "address" in payload and payload["address"] is not None:
+        existing = dict(shop.address or {})
+        existing.update(payload["address"])
+        payload["address"] = await _build_address(db, existing)
+
+    for field, value in payload.items():
         setattr(shop, field, value)
+
     await db.flush()
-    result = await db.execute(_shop_query().where(Shop.id == shop.id))
-    return result.scalar_one()
+    return await get_shop_by_id(db, shop.id)
 
 
 async def delete_shop(db: AsyncSession, shop: Shop) -> None:
@@ -71,22 +109,22 @@ async def delete_shop(db: AsyncSession, shop: Shop) -> None:
     await db.flush()
 
 
-def serialize_shop(shop: Shop) -> ShopResponse:
-    return ShopResponse(
-        id=shop.id,
-        name=shop.name,
-        place=shop.place,
-        latitude=float(shop.latitude) if shop.latitude is not None else None,
-        longitude=float(shop.longitude) if shop.longitude is not None else None,
-        gst_number=shop.gst_number,
-        contact_person=shop.contact_person,
-        contact_number=shop.contact_number,
-        phone=shop.phone,
-        state=shop.state,
-        pincode=shop.pincode,
-        is_active=shop.is_active,
-        district_id=shop.district_id,
-        district_name=shop.district.name if shop.district else None,
-        created_at=shop.created_at,
-        updated_at=shop.updated_at,
-    )
+def serialize_shop(shop: Shop) -> dict:
+    return {
+        "id": str(shop.id),
+        "name": shop.name,
+        "gst_number": shop.gst_number,
+        "contact_person": shop.contact_person,
+        "contact_number": shop.contact_number,
+        "phone": shop.phone,
+        "address": shop.address or {},
+        "is_active": shop.is_active,
+        "district_id": str(shop.district_id),
+        "district_name": shop.district.name if shop.district else None,
+        "state_id": str(shop.district.state_id) if shop.district else None,
+        "state_name": shop.district.state.name if shop.district and shop.district.state else None,
+        "taluk_id": str(shop.taluk_id) if shop.taluk_id else None,
+        "taluk_name": shop.taluk.name if shop.taluk else None,
+        "created_at": shop.created_at.isoformat(),
+        "updated_at": shop.updated_at.isoformat(),
+    }

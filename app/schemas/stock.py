@@ -1,13 +1,14 @@
 import uuid
-from pydantic import BaseModel
+
+from app.schemas.base import CamelModel
 
 
-class StockUpdate(BaseModel):
+class StockUpdate(CamelModel):
     individual_count: int
     bundle_count: int
 
 
-class StockResponse(BaseModel):
+class StockResponse(CamelModel):
     id: uuid.UUID
     variant_id: uuid.UUID
     individual_count: int

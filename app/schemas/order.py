@@ -1,18 +1,18 @@
 import uuid
 from typing import Optional, List
 from datetime import datetime
-from pydantic import BaseModel
 from app.models.order import OrderStatus, OrderItemType
+from app.schemas.base import CamelModel
 
 
-class OrderItemCreate(BaseModel):
+class OrderItemCreate(CamelModel):
     variant_id: uuid.UUID
     item_type: OrderItemType
     quantity: int
     unit_price: float
 
 
-class OrderItemResponse(BaseModel):
+class OrderItemResponse(CamelModel):
     id: uuid.UUID
     variant_id: uuid.UUID
     item_type: OrderItemType
@@ -22,19 +22,19 @@ class OrderItemResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class OrderCreate(BaseModel):
+class OrderCreate(CamelModel):
     tenant_id: uuid.UUID
     shop_id: uuid.UUID
     notes: Optional[str] = None
     items: List[OrderItemCreate]
 
 
-class OrderUpdate(BaseModel):
+class OrderUpdate(CamelModel):
     notes: Optional[str] = None
     status: Optional[OrderStatus] = None
 
 
-class OrderResponse(BaseModel):
+class OrderResponse(CamelModel):
     id: uuid.UUID
     tenant_id: uuid.UUID
     shop_id: uuid.UUID

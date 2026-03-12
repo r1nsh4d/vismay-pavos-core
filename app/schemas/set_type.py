@@ -1,15 +1,16 @@
 import uuid
 from typing import Optional, List
 from datetime import datetime
-from pydantic import BaseModel
+
+from app.schemas.base import CamelModel
 
 
-class SetTypeItemCreate(BaseModel):
+class SetTypeItemCreate(CamelModel):
     size: str
     quantity: int = 1
 
 
-class SetTypeCreate(BaseModel):
+class SetTypeCreate(CamelModel):
     category_id: uuid.UUID
     name: str
     description: Optional[str] = None
@@ -17,20 +18,20 @@ class SetTypeCreate(BaseModel):
     items: List[SetTypeItemCreate] = []
 
 
-class SetTypeUpdate(BaseModel):
+class SetTypeUpdate(CamelModel):
     name: Optional[str] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None
     items: Optional[List[SetTypeItemCreate]] = None  # replaces all items if provided
 
 
-class SetTypeItemResponse(BaseModel):
+class SetTypeItemResponse(CamelModel):
     size: str
     quantity: int
     model_config = {"from_attributes": True}
 
 
-class SetTypeResponse(BaseModel):
+class SetTypeResponse(CamelModel):
     id: uuid.UUID
     category_id: uuid.UUID
     name: str

@@ -1,23 +1,24 @@
 import uuid
 from typing import Optional
 from datetime import datetime
-from pydantic import BaseModel
+
+from app.schemas.base import CamelModel
 
 
-class CategoryCreate(BaseModel):
+class CategoryCreate(CamelModel):
     tenant_id: uuid.UUID
     name: str
     description: Optional[str] = None
     is_active: bool = True
 
 
-class CategoryUpdate(BaseModel):
+class CategoryUpdate(CamelModel):
     name: Optional[str] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None
 
 
-class CategoryResponse(BaseModel):
+class CategoryResponse(CamelModel):
     id: uuid.UUID
     tenant_id: uuid.UUID
     name: str

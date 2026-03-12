@@ -1,18 +1,18 @@
 import uuid
 from typing import Optional, List
 from datetime import datetime
-from pydantic import BaseModel
 from app.models.product import SellType
+from app.schemas.base import CamelModel
 
 
-class ProductVariantCreate(BaseModel):
+class ProductVariantCreate(CamelModel):
     color: Optional[str] = None
     pattern: Optional[str] = None
     size: Optional[str] = None
     sku: Optional[str] = None
 
 
-class ProductVariantResponse(BaseModel):
+class ProductVariantResponse(CamelModel):
     id: uuid.UUID
     color: Optional[str]
     pattern: Optional[str]
@@ -22,7 +22,7 @@ class ProductVariantResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class ProductCreate(BaseModel):
+class ProductCreate(CamelModel):
     tenant_id: uuid.UUID
     category_id: uuid.UUID
     set_type_id: Optional[uuid.UUID] = None
@@ -36,7 +36,7 @@ class ProductCreate(BaseModel):
     variants: List[ProductVariantCreate] = []
 
 
-class ProductUpdate(BaseModel):
+class ProductUpdate(CamelModel):
     name: Optional[str] = None
     model: Optional[str] = None
     description: Optional[str] = None
@@ -47,7 +47,7 @@ class ProductUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
-class ProductResponse(BaseModel):
+class ProductResponse(CamelModel):
     id: uuid.UUID
     tenant_id: uuid.UUID
     category_id: uuid.UUID

@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional
-from sqlalchemy import String, ForeignKey, Numeric, Boolean, JSON
+from sqlalchemy import String, ForeignKey, Boolean, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import BaseModel
 
@@ -14,10 +14,7 @@ class Shop(BaseModel):
     contact_number: Mapped[Optional[str]] = mapped_column(String(20))
     phone: Mapped[Optional[str]] = mapped_column(String(20))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-
-    # Address as JSON
     address: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    # e.g. {"place": "...", "state": "...", "pincode": "...", "latitude": 0.0, "longitude": 0.0}
 
     district_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("districts.id"), nullable=False, index=True

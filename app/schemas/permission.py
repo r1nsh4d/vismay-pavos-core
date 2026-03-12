@@ -10,6 +10,7 @@ class PermissionCreate(CamelModel):
     code: str
     description: Optional[str] = None
 
+
 class PermissionResponse(CamelModel):
     id: uuid.UUID
     name: str

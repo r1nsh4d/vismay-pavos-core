@@ -9,7 +9,6 @@ from app.models import (
     User, UserTenant, UserDistrict, Tenant,
     District, Role, AuthToken, RolePermission,
 )
-from app.models.state import State
 from app.schemas.user import UserCreate, UserUpdate, UserResponse
 from app.core.security import AuthMgmt
 

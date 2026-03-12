@@ -6,7 +6,6 @@ from app.database import get_db, engine, Base
 from app.schemas.common import ResponseModel
 from app.core.security import AuthMgmt
 
-# ── Import ALL models so Base.metadata knows about them before create_all ─────
 from app.models import (  # noqa: F401
     Permission, RolePermission,
     Role,
@@ -19,10 +18,11 @@ from app.models import (  # noqa: F401
     SetType, SetTypeItem,
     Product, ProductVariant,
     Stock,
-    Order, OrderItem,
+    Order, OrderItem, State, Taluk
 )
 
 router = APIRouter(tags=["Seed"])
+
 
 # ─── Seed data ────────────────────────────────────────────────────────────────
 
@@ -30,34 +30,80 @@ SAMPLE_TENANTS = [
     {"name": "Channel Fashion", "code": "CHANNEL_FASHION"},
 ]
 
-SAMPLE_DISTRICTS = [
-    {"name": "Thiruvananthapuram", "state": "Kerala"},
-    {"name": "Kollam",             "state": "Kerala"},
-    {"name": "Pathanamthitta",     "state": "Kerala"},
-    {"name": "Alappuzha",          "state": "Kerala"},
-    {"name": "Kottayam",           "state": "Kerala"},
-    {"name": "Idukki",             "state": "Kerala"},
-    {"name": "Ernakulam",          "state": "Kerala"},
-    {"name": "Thrissur",           "state": "Kerala"},
-    {"name": "Palakkad",           "state": "Kerala"},
-    {"name": "Malappuram",         "state": "Kerala"},
-    {"name": "Kozhikode",          "state": "Kerala"},
-    {"name": "Wayanad",            "state": "Kerala"},
-    {"name": "Kannur",             "state": "Kerala"},
-    {"name": "Kasaragod",          "state": "Kerala"},
+KERALA_STATE = {"name": "Kerala", "code": "KL"}
+
+KERALA_DISTRICTS_TALUKS = [
+    {
+        "name": "Thiruvananthapuram",
+        "taluks": ["Thiruvananthapuram", "Chirayinkeezhu", "Nedumangad", "Neyyattinkara", "Varkala", "Kattakada"],
+    },
+    {
+        "name": "Kollam",
+        "taluks": ["Kollam", "Kunnathur", "Kottarakkara", "Pathanapuram", "Punalur", "Karunagappally"],
+    },
+    {
+        "name": "Pathanamthitta",
+        "taluks": ["Pathanamthitta", "Adoor", "Kozhencherry", "Mallappally", "Ranni", "Thiruvalla"],
+    },
+    {
+        "name": "Alappuzha",
+        "taluks": ["Alappuzha", "Ambalappuzha", "Chengannur", "Karthikappally", "Kuttanad", "Mavelikkara"],
+    },
+    {
+        "name": "Kottayam",
+        "taluks": ["Kottayam", "Changanassery", "Kanjirappally", "Meenachil", "Vaikom"],
+    },
+    {
+        "name": "Idukki",
+        "taluks": ["Devikulam", "Idukki", "Peermade", "Thodupuzha", "Udumbanchola"],
+    },
+    {
+        "name": "Ernakulam",
+        "taluks": ["Aluva", "Kanayannur", "Kochi", "Kothamangalam", "Kunnathunad", "Muvattupuzha", "Paravur"],
+    },
+    {
+        "name": "Thrissur",
+        "taluks": ["Chalakudy", "Kodungallur", "Mukundapuram", "Talappilly", "Thrissur"],
+    },
+    {
+        "name": "Palakkad",
+        "taluks": ["Alathur", "Attappady", "Chittur", "Mannarkkad", "Palakkad", "Pattambi", "Thrithala"],
+    },
+    {
+        "name": "Malappuram",
+        "taluks": ["Ernad", "Kondotty", "Manjeri", "Nilambur", "Perinthalmanna", "Ponnani", "Tirur", "Tirurangadi"],
+    },
+    {
+        "name": "Kozhikode",
+        "taluks": ["Koyilandy", "Kozhikode", "Mukkom", "Thamarassery", "Vadakara"],
+    },
+    {
+        "name": "Wayanad",
+        "taluks": ["Mananthavady", "Sultan Bathery", "Vythiri"],
+    },
+    {
+        "name": "Kannur",
+        "taluks": ["Iritty", "Kannur", "Taliparamba", "Thalassery"],
+    },
+    {
+        "name": "Kasaragod",
+        "taluks": ["Hosdurg", "Kasaragod", "Manjeshwar", "Velu"],
+    },
 ]
 
 SYSTEM_ROLES = [
-    {"name": "super_admin",  "description": "Full system access"},
-    {"name": "admin",        "description": "Tenant-level admin"},
-    {"name": "distributor",  "description": "Distributor access"},
-    {"name": "executive",    "description": "Executive access"},
+    {"name": "super_admin", "description": "Full system access"},
+    {"name": "admin",       "description": "Tenant-level admin"},
+    {"name": "scm_user",    "description": "SCM access — same as admin but cannot manage admin users"},
+    {"name": "distributor", "description": "Distributor access"},
+    {"name": "executive",   "description": "Executive access"},
 ]
 
 MODULES = [
     "tenants", "users", "roles", "permissions",
     "categories", "set_types", "products",
     "shops", "stocks", "orders", "reports", "dashboard",
+    "states", "districts", "taluks",
 ]
 ACTIONS = ["read", "create", "update", "delete"]
 
@@ -71,7 +117,16 @@ ALL_PERMISSIONS = [
     for action in ACTIONS
 ]
 
-# Roles that receive ALL permissions at seed time
+# All permissions except admin user management
+SCM_EXCLUDED_PERMISSIONS = {
+    "users:create",
+    "users:update",
+    "users:delete",
+    "roles:create",
+    "roles:update",
+    "roles:delete",
+}
+
 FULL_ACCESS_ROLES = {"super_admin", "admin"}
 
 SUPER_ADMIN = {
@@ -92,21 +147,52 @@ async def run_seed(db: AsyncSession = Depends(get_db)):
     # Step 1: Create all tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    # engine.begin() auto-commits on exit, but we also need
-    # to expire the session so it sees the new tables
     await db.commit()
 
     results = {
         "tables_created":            True,
-        "tenants":                   [],
+        "state":                     None,
         "districts":                 [],
+        "taluks":                    [],
+        "tenants":                   [],
         "roles":                     [],
         "permissions_seeded":        [],
         "role_permissions_assigned": {},
         "super_admin":               None,
     }
 
-    # Step 2: Seed tenants
+    # Step 2: Seed Kerala state
+    kerala = await db.scalar(select(State).where(State.code == KERALA_STATE["code"]))
+    if not kerala:
+        kerala = State(**KERALA_STATE)
+        db.add(kerala)
+        await db.flush()
+        results["state"] = "Kerala created"
+    else:
+        results["state"] = "Kerala already exists"
+
+    # Step 3: Seed districts + taluks for Kerala
+    for d_data in KERALA_DISTRICTS_TALUKS:
+        district = await db.scalar(
+            select(District).where(District.name == d_data["name"], District.state_id == kerala.id)
+        )
+        if not district:
+            district = District(name=d_data["name"], state_id=kerala.id, is_active=True)
+            db.add(district)
+            await db.flush()
+            results["districts"].append(d_data["name"])
+
+        for taluk_name in d_data["taluks"]:
+            taluk_exists = await db.scalar(
+                select(Taluk).where(Taluk.name == taluk_name, Taluk.district_id == district.id)
+            )
+            if not taluk_exists:
+                db.add(Taluk(name=taluk_name, district_id=district.id, is_active=True))
+                results["taluks"].append(f"{d_data['name']} → {taluk_name}")
+
+        await db.flush()
+
+    # Step 4: Seed tenants
     for t_data in SAMPLE_TENANTS:
         exists = await db.scalar(select(Tenant).where(Tenant.code == t_data["code"]))
         if not exists:
@@ -114,46 +200,34 @@ async def run_seed(db: AsyncSession = Depends(get_db)):
             results["tenants"].append(t_data["code"])
     await db.flush()
 
-    # Step 3: Seed districts
-    for d_data in SAMPLE_DISTRICTS:
-        exists = await db.scalar(select(District).where(District.name == d_data["name"]))
-        if not exists:
-            db.add(District(**d_data))
-            results["districts"].append(d_data["name"])
-    await db.flush()
-
-    # Step 4: Seed roles
+    # Step 5: Seed roles
     role_map: dict = {}
     for r_data in SYSTEM_ROLES:
-        exists = await db.scalar(select(Role).where(Role.name == r_data["name"]))
-        if not exists:
+        role = await db.scalar(select(Role).where(Role.name == r_data["name"]))
+        if not role:
             role = Role(**r_data)
             db.add(role)
             await db.flush()
-            role_map[r_data["name"]] = role.id
             results["roles"].append(r_data["name"])
-        else:
-            role_map[r_data["name"]] = exists.id
+        role_map[r_data["name"]] = role.id
 
-    # Step 5: Seed permissions
+    # Step 6: Seed permissions
     permission_map: dict = {}
     for p_data in ALL_PERMISSIONS:
-        exists = await db.scalar(select(Permission).where(Permission.code == p_data["code"]))
-        if not exists:
+        perm = await db.scalar(select(Permission).where(Permission.code == p_data["code"]))
+        if not perm:
             perm = Permission(**p_data)
             db.add(perm)
             await db.flush()
-            permission_map[p_data["code"]] = perm.id
             results["permissions_seeded"].append(p_data["code"])
-        else:
-            permission_map[p_data["code"]] = exists.id
+        permission_map[p_data["code"]] = perm.id
 
-    # Step 6: Assign all permissions to full-access roles
+    # Step 7: Assign permissions to roles
+    # super_admin + admin → all permissions
     for role_name in FULL_ACCESS_ROLES:
         role_id = role_map.get(role_name)
         if not role_id:
             continue
-
         assigned = 0
         for perm_id in permission_map.values():
             exists = await db.scalar(
@@ -165,11 +239,29 @@ async def run_seed(db: AsyncSession = Depends(get_db)):
             if not exists:
                 db.add(RolePermission(role_id=role_id, permission_id=perm_id))
                 assigned += 1
-
         await db.flush()
         results["role_permissions_assigned"][role_name] = assigned
 
-    # Step 7: Seed super admin user
+    # scm_user → all permissions except admin management
+    scm_role_id = role_map.get("scm_user")
+    if scm_role_id:
+        assigned = 0
+        for perm_code, perm_id in permission_map.items():
+            if perm_code in SCM_EXCLUDED_PERMISSIONS:
+                continue
+            exists = await db.scalar(
+                select(RolePermission).where(
+                    RolePermission.role_id == scm_role_id,
+                    RolePermission.permission_id == perm_id,
+                )
+            )
+            if not exists:
+                db.add(RolePermission(role_id=scm_role_id, permission_id=perm_id))
+                assigned += 1
+        await db.flush()
+        results["role_permissions_assigned"]["scm_user"] = assigned
+
+    # Step 8: Seed super admin user
     exists = await db.scalar(select(User).where(User.email == SUPER_ADMIN["email"]))
     if not exists:
         db.add(User(

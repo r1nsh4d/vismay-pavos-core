@@ -1,22 +1,23 @@
 import uuid
 from typing import Optional
 from datetime import datetime
-from pydantic import BaseModel
+
+from app.schemas.base import CamelModel
 
 
-class StateCreate(BaseModel):
+class StateCreate(CamelModel):
     name: str
     code: str
     is_active: bool = True
 
 
-class StateUpdate(BaseModel):
+class StateUpdate(CamelModel):
     name: Optional[str] = None
     code: Optional[str] = None
     is_active: Optional[bool] = None
 
 
-class StateResponse(BaseModel):
+class StateResponse(CamelModel):
     id: uuid.UUID
     name: str
     code: str
