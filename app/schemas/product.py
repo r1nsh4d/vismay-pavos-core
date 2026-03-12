@@ -10,6 +10,7 @@ class ProductVariantCreate(CamelModel):
     pattern: Optional[str] = None
     size: Optional[str] = None
     sku: Optional[str] = None
+    image_url: Optional[str] = None
 
 
 class ProductVariantResponse(CamelModel):
@@ -18,6 +19,7 @@ class ProductVariantResponse(CamelModel):
     pattern: Optional[str]
     size: Optional[str]
     sku: Optional[str]
+    image_url: Optional[str]
     is_active: bool
     model_config = {"from_attributes": True}
 
@@ -25,7 +27,6 @@ class ProductVariantResponse(CamelModel):
 class ProductCreate(CamelModel):
     tenant_id: uuid.UUID
     category_id: uuid.UUID
-    set_type_id: Optional[uuid.UUID] = None
     name: str
     model: Optional[str] = None
     description: Optional[str] = None
@@ -43,7 +44,6 @@ class ProductUpdate(CamelModel):
     dp_price: Optional[float] = None
     mrp: Optional[float] = None
     sell_type: Optional[SellType] = None
-    set_type_id: Optional[uuid.UUID] = None
     is_active: Optional[bool] = None
 
 
@@ -51,7 +51,6 @@ class ProductResponse(CamelModel):
     id: uuid.UUID
     tenant_id: uuid.UUID
     category_id: uuid.UUID
-    set_type_id: Optional[uuid.UUID]
     name: str
     model: Optional[str]
     description: Optional[str]

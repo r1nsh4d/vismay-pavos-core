@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from app.models.product import Product, ProductVariant
 from app.models.stock import Stock
-from app.schemas.product import ProductCreate, ProductUpdate
+from app.schemas.product import ProductCreate, ProductUpdate, ProductVariantCreate
 
 
 def _product_query():
@@ -22,7 +22,6 @@ async def search_products(
     q: Optional[str] = None,
     tenant_id: Optional[uuid.UUID] = None,
     category_id: Optional[uuid.UUID] = None,
-    set_type_id: Optional[uuid.UUID] = None,
     is_active: Optional[bool] = None,
     page: int = 1,
     limit: int = 20,
@@ -37,8 +36,6 @@ async def search_products(
         query = query.where(Product.tenant_id == tenant_id)
     if category_id:
         query = query.where(Product.category_id == category_id)
-    if set_type_id:
-        query = query.where(Product.set_type_id == set_type_id)
     if is_active is not None:
         query = query.where(Product.is_active == is_active)
 
@@ -51,7 +48,6 @@ async def create_product(db: AsyncSession, product_in: ProductCreate) -> Product
     product = Product(
         tenant_id=product_in.tenant_id,
         category_id=product_in.category_id,
-        set_type_id=product_in.set_type_id,
         name=product_in.name,
         model=product_in.model,
         description=product_in.description,
@@ -95,3 +91,42 @@ async def add_variant(db: AsyncSession, product_id: uuid.UUID, variant_in) -> Pr
     db.add(Stock(variant_id=variant.id, individual_count=0, bundle_count=0))
     await db.flush()
     return variant
+
+
+async def update_variant(
+    db: AsyncSession, product_id: uuid.UUID, variant_id: uuid.UUID, variant_in) -> Optional[ProductVariant]:
+    result = await db.execute(
+        select(ProductVariant).where(
+            ProductVariant.id == variant_id,
+            ProductVariant.product_id == product_id,
+        )
+    )
+    variant = result.scalar_one_or_none()
+    if not variant:
+        return None
+
+    for field, value in variant_in.model_dump(exclude_unset=True).items():
+        setattr(variant, field, value)
+
+    await db.flush()
+    return variant
+
+
+async def delete_variant(
+    db: AsyncSession,
+    product_id: uuid.UUID,
+    variant_id: uuid.UUID,
+) -> bool:
+    result = await db.execute(
+        select(ProductVariant).where(
+            ProductVariant.id == variant_id,
+            ProductVariant.product_id == product_id,
+        )
+    )
+    variant = result.scalar_one_or_none()
+    if not variant:
+        return False
+
+    await db.delete(variant)
+    await db.flush()
+    return True

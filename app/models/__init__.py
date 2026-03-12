@@ -11,8 +11,7 @@ from app.models.category import Category
 from app.models.set_type import SetType, SetTypeItem
 from app.models.product import Product, ProductVariant, SellType
 from app.models.stock import Stock
-from app.models.order import Order, OrderItem, OrderStatus, OrderItemType
-
+from app.models.order import Order, OrderItem, OrderStatus, OrderType
 from app.models.base import BaseModel
 from app.database import Base
 
@@ -41,5 +40,5 @@ __all__ = [
     "Order",
     "OrderItem",
     "OrderStatus",
-    "OrderItemType",
+    "OrderType",
 ]

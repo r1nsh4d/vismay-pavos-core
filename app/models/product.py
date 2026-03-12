@@ -41,7 +41,8 @@ class ProductVariant(BaseModel):
     pattern: Mapped[Optional[str]] = mapped_column(String(100))
     size: Mapped[Optional[str]] = mapped_column(String(20))
     sku: Mapped[Optional[str]] = mapped_column(String(100), unique=True, index=True)
+    image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     product = relationship("Product", back_populates="variants")
-    stock = relationship("Stock", back_populates="variant", uselist=False)
+    stock = relationship("Stock", back_populates="variant", uselist=False, cascade="all, delete-orphan",)

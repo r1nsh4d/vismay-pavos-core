@@ -1,10 +1,11 @@
 import uuid
+from fastapi import HTTPException
 from typing import List, Tuple, Optional
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import State
+from app.models import State, Taluk
 from app.models.shop import Shop
 from app.models.district import District
 from app.schemas.shop import ShopCreate, ShopUpdate
@@ -77,8 +78,28 @@ async def _build_address(db: AsyncSession, address: dict) -> dict:
     return address
 
 
+async def _validate_references(db: AsyncSession, district_id: uuid.UUID, taluk_id: Optional[uuid.UUID]) -> None:
+    """Validate district exists and taluk (if provided) belongs to that district."""
+    from app.core.exceptions import AppException  # adjust import to your path
+
+    # Validate district
+    district = await db.scalar(select(District).where(District.id == district_id))
+    if not district:
+        raise HTTPException(status_code=404, detail="District not found")
+
+    # Validate taluk belongs to the district
+    if taluk_id:
+        taluk = await db.scalar(
+            select(Taluk).where(Taluk.id == taluk_id, Taluk.district_id == district_id)
+        )
+        if not taluk:
+            raise HTTPException(status_code=400, detail="Taluk does not belong to the given district")
+
+
 async def create_shop(db: AsyncSession, data: ShopCreate) -> Shop:
     payload = data.model_dump()
+
+    await _validate_references(db, payload["district_id"], payload.get("taluk_id"))
 
     if payload.get("address"):
         payload["address"] = await _build_address(db, dict(payload["address"]))
@@ -91,6 +112,11 @@ async def create_shop(db: AsyncSession, data: ShopCreate) -> Shop:
 
 async def update_shop(db: AsyncSession, shop: Shop, data: ShopUpdate) -> Shop:
     payload = data.model_dump(exclude_unset=True)
+
+    district_id = payload.get("district_id", shop.district_id)
+    taluk_id = payload.get("taluk_id", shop.taluk_id)
+    if "district_id" in payload or "taluk_id" in payload:
+        await _validate_references(db, district_id, taluk_id)
 
     if "address" in payload and payload["address"] is not None:
         existing = dict(shop.address or {})
