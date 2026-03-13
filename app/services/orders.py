@@ -50,7 +50,7 @@ async def create_bundle_order(db: AsyncSession, data: BundleOrderCreate, created
             raise AppException(
                 status_code=404, detail=f"SetType {item.set_type_id} not found")
 
-        unit_price = float(product.dp_price)
+        unit_price = float(product.mrp)
         total_price = unit_price * item.count
         subtotal += total_price
 
@@ -112,7 +112,7 @@ async def create_individual_order(db: AsyncSession, data: IndividualOrderCreate,
             raise AppException(
                 status_code=404, detail=f"Variant {item.variant_id} not found for product {item.product_id}")
 
-        unit_price = float(product.dp_price)
+        unit_price = float(product.mrp)
         total_price = unit_price * item.count
         subtotal += total_price
 
@@ -184,13 +184,13 @@ async def search_orders(
 
 
 async def _resolve_item_price(db: AsyncSession, item: OrderItemCreate, order_type: OrderType) -> float:
-    """Get dp_price from the product."""
+    """Get mrp_price from the product."""
     product = await db.scalar(select(Product).where(Product.id == item.product_id))
     if not product:
         raise AppException(
             status_code=404,
             detail=f"Product {item.product_id} not found")
-    return float(product.dp_price)
+    return float(product.mrp)
 
 
 async def create_order(db: AsyncSession, data: OrderCreate, created_by: uuid.UUID) -> Order:
