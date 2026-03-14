@@ -64,6 +64,7 @@ class ShopCreate(CamelModel):
                 "district_id": "667aa3ae-9c86-4058-ba14-9fc511209a13",
                 "taluk_id": "084479ae-0319-40dd-bf9e-1351b31bf45e",
                 "is_active": True,
+                "is_ebo": False
             }
         }
     }
