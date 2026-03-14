@@ -6,10 +6,11 @@ from app.schemas.base import CamelModel
 
 
 class ShopAddress(CamelModel):
-    place: Optional[str] = None
+    line1: Optional[str] = None
+    line2: Optional[str] = None
+    city: Optional[str] = None
     state_id: Optional[uuid.UUID] = None
     state_name: Optional[str] = None
-    state_code: Optional[str] = None
     pincode: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
@@ -17,10 +18,11 @@ class ShopAddress(CamelModel):
     model_config = {
         "json_schema_extra": {
             "example": {
-                "place": "MG Road",
+                "line1": "",
+                "line2": "",
+                "city": "MG Road",
                 "state_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
                 "state_name": "Kerala",
-                "state_code": "KL",
                 "pincode": "682001",
                 "latitude": 9.9312,
                 "longitude": 76.2673,
@@ -50,10 +52,11 @@ class ShopCreate(CamelModel):
                 "contact_number": "9876543210",
                 "phone": "04842345678",
                 "address": {
-                    "place": "MG Road",
+                    "line1": "",
+                    "line2": "",
+                    "city": "MG Road",
                     "state_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
                     "state_name": "Kerala",
-                    "state_code": "KL",
                     "pincode": "682001",
                     "latitude": 9.9312,
                     "longitude": 76.2673,
