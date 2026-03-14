@@ -118,6 +118,10 @@ ALL_PERMISSIONS = [
 ]
 
 # All permissions except admin user management
+# Replace SCM_EXCLUDED_PERMISSIONS and FULL_ACCESS_ROLES section with this:
+
+FULL_ACCESS_ROLES = {"super_admin", "admin"}
+
 SCM_EXCLUDED_PERMISSIONS = {
     "users:create",
     "users:update",
@@ -127,7 +131,47 @@ SCM_EXCLUDED_PERMISSIONS = {
     "roles:delete",
 }
 
-FULL_ACCESS_ROLES = {"super_admin", "admin"}
+DISTRIBUTOR_PERMISSIONS = {
+    # Products - read only
+    "products:read",
+    # Shops - manage own shop
+    "shops:read",
+    "shops:create",
+    "shops:update",
+    # Orders - full order management
+    "orders:read",
+    "orders:create",
+    "orders:update",
+    "orders:delete",
+    # Stocks - read only
+    "stocks:read",
+    # Categories & set types - read only
+    "categories:read",
+    "set_types:read",
+    # Dashboard & reports - read only
+    "dashboard:read",
+    "reports:read",
+}
+
+EXECUTIVE_PERMISSIONS = {
+    # Products - read only
+    "products:read",
+    # Shops - read and update
+    "shops:read",
+    "shops:update",
+    # Orders - full order management
+    "orders:read",
+    "orders:create",
+    "orders:update",
+    # Stocks - read only
+    "stocks:read",
+    # Categories & set types - read only
+    "categories:read",
+    "set_types:read",
+    # Dashboard & reports
+    "dashboard:read",
+    "reports:read",
+}
 
 SUPER_ADMIN = {
     "username":   "superadmin",
@@ -260,6 +304,44 @@ async def run_seed(db: AsyncSession = Depends(get_db)):
                 assigned += 1
         await db.flush()
         results["role_permissions_assigned"]["scm_user"] = assigned
+
+    # distributor → limited permissions
+    distributor_role_id = role_map.get("distributor")
+    if distributor_role_id:
+        assigned = 0
+        for perm_code, perm_id in permission_map.items():
+            if perm_code not in DISTRIBUTOR_PERMISSIONS:
+                continue
+            exists = await db.scalar(
+                select(RolePermission).where(
+                    RolePermission.role_id == distributor_role_id,
+                    RolePermission.permission_id == perm_id,
+                )
+            )
+            if not exists:
+                db.add(RolePermission(role_id=distributor_role_id, permission_id=perm_id))
+                assigned += 1
+        await db.flush()
+        results["role_permissions_assigned"]["distributor"] = assigned
+
+    # executive → limited permissions
+    executive_role_id = role_map.get("executive")
+    if executive_role_id:
+        assigned = 0
+        for perm_code, perm_id in permission_map.items():
+            if perm_code not in EXECUTIVE_PERMISSIONS:
+                continue
+            exists = await db.scalar(
+                select(RolePermission).where(
+                    RolePermission.role_id == executive_role_id,
+                    RolePermission.permission_id == perm_id,
+                )
+            )
+            if not exists:
+                db.add(RolePermission(role_id=executive_role_id, permission_id=perm_id))
+                assigned += 1
+        await db.flush()
+        results["role_permissions_assigned"]["executive"] = assigned
 
     # Step 8: Seed super admin user
     exists = await db.scalar(select(User).where(User.email == SUPER_ADMIN["email"]))

@@ -39,6 +39,7 @@ class ShopCreate(CamelModel):
     district_id: uuid.UUID
     taluk_id: Optional[uuid.UUID] = None
     is_active: bool = True
+    is_ebo: bool = False
 
     model_config = {
         "json_schema_extra": {
@@ -75,6 +76,7 @@ class ShopUpdate(CamelModel):
     district_id: Optional[uuid.UUID] = None
     taluk_id: Optional[uuid.UUID] = None
     is_active: Optional[bool] = None
+    is_ebo: Optional[bool] = None
 
 
 class ShopResponse(CamelModel):
@@ -86,6 +88,7 @@ class ShopResponse(CamelModel):
     phone: Optional[str] = None
     address: Optional[Any] = None
     is_active: bool
+    is_ebo: bool
     district_id: uuid.UUID
     district_name: Optional[str] = None
     state_id: Optional[str] = None

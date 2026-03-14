@@ -27,6 +27,7 @@ async def search_shops(
     district_ids: str | None = Query(default=None, description="Comma-separated district UUIDs"),
     taluk_ids: str | None = Query(default=None, description="Comma-separated taluk UUIDs"),
     is_active: bool | None = None,
+    is_ebo: bool | None = Query(default=None, description="Filter EBO shops"),
     page: int = 1,
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
@@ -38,6 +39,7 @@ async def search_shops(
         district_ids=_parse_uuids(district_ids),
         taluk_ids=_parse_uuids(taluk_ids),
         is_active=is_active,
+        is_ebo=is_ebo,
         page=page,
         limit=limit,
     )

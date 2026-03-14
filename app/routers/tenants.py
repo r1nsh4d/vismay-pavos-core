@@ -10,7 +10,7 @@ from app.schemas.tenant import TenantCreate, TenantResponse
 from app.services import tenants as tenant_mgmt
 
 router = APIRouter(
-    prefix="/tenants", tags=["Tenants"], dependencies=[Depends(require_roles("super_admin", "admin"))])
+    prefix="/tenants", tags=["Tenants"], dependencies=[Depends(require_roles("super_admin", "admin", "scm_user"))])
 
 
 @router.post("", response_model=CommonResponse)

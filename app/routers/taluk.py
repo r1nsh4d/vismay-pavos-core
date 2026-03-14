@@ -12,7 +12,7 @@ from app.services import taluk as taluk_mgmt
 
 router = APIRouter(
     prefix="/taluks", tags=["Taluks"],
-    dependencies=[Depends(require_roles("super_admin", "admin"))]
+    dependencies=[Depends(require_roles("super_admin", "admin", "scm_user"))]
 )
 
 

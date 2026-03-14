@@ -2,11 +2,13 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
+from app.dependencies import require_roles
 from app.schemas.common import CommonResponse, ResponseModel, ErrorResponseModel
 from app.schemas.category import CategoryCreate, CategoryUpdate, CategoryResponse
 from app.services import categories as cat_svc
 
-router = APIRouter(prefix="/categories", tags=["Categories"])
+router = APIRouter(
+    prefix="/categories", tags=["Categories"], dependencies=[Depends(require_roles("super_admin", "admin", "scm_user"))])
 
 
 @router.post("", response_model=CommonResponse)

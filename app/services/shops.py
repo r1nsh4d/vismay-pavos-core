@@ -30,6 +30,7 @@ async def search_shops(
     taluk_ids: List[uuid.UUID] = [],
     state_ids: List[uuid.UUID] = [],
     is_active: Optional[bool] = None,
+    is_ebo: Optional[bool] = None,
     page: int = 1,
     limit: int = 20,
 ) -> Tuple[List[Shop], int]:
@@ -50,6 +51,8 @@ async def search_shops(
         query = query.where(Shop.taluk_id.in_(taluk_ids))
     if is_active is not None:
         query = query.where(Shop.is_active == is_active)
+    if is_ebo is not None:
+        query = query.where(Shop.is_ebo == is_ebo)
 
     total_result = await db.execute(select(func.count()).select_from(query.subquery()))
     total = total_result.scalar() or 0
@@ -145,6 +148,7 @@ def serialize_shop(shop: Shop) -> dict:
         "phone": shop.phone,
         "address": shop.address or {},
         "is_active": shop.is_active,
+        "is_ebo": shop.is_ebo,
         "district_id": str(shop.district_id),
         "district_name": shop.district.name if shop.district else None,
         "state_id": str(shop.district.state_id) if shop.district else None,

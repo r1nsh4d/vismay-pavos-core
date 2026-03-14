@@ -12,7 +12,7 @@ from app.services import districts as district_mgmt
 
 router = APIRouter(
     prefix="/districts", tags=["Districts"],
-    dependencies=[Depends(require_roles("super_admin", "admin"))]
+    dependencies=[Depends(require_roles("super_admin", "admin", "scm_user"))]
 )
 
 

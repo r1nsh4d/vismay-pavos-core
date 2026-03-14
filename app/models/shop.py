@@ -14,6 +14,7 @@ class Shop(BaseModel):
     contact_number: Mapped[Optional[str]] = mapped_column(String(20))
     phone: Mapped[Optional[str]] = mapped_column(String(20))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_ebo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     address: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     district_id: Mapped[uuid.UUID] = mapped_column(
