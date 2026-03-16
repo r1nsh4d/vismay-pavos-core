@@ -8,6 +8,7 @@ from app.models.tenant import Tenant
 from app.models.shop import Shop
 from app.models.user import User, UserTenant, UserDistrict
 from app.models.category import Category
+from app.models.product_model import ProductModel
 from app.models.set_type import SetType, SetTypeItem
 from app.models.product import Product, ProductVariant, SellType
 from app.models.stock import Stock
@@ -33,6 +34,7 @@ __all__ = [
     "Category",
     "SetType",
     "SetTypeItem",
+
     "Product",
     "ProductVariant",
     "SellType",

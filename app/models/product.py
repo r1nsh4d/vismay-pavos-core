@@ -20,7 +20,7 @@ class Product(BaseModel):
     set_type_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("set_types.id"), nullable=True)
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    model: Mapped[Optional[str]] = mapped_column(String(255))
+    model_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("product_model.id"), nullable=True, index=True)
     description: Mapped[Optional[str]] = mapped_column(Text)
     dp_price: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     mrp: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
@@ -31,6 +31,7 @@ class Product(BaseModel):
     category = relationship("Category", back_populates="products")
     set_type = relationship("SetType", backref="products")
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
+    model_ref = relationship("ProductModel", back_populates="products")
 
 
 class ProductVariant(BaseModel):

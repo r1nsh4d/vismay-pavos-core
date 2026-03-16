@@ -17,3 +17,4 @@ class Category(BaseModel):
     tenant = relationship("Tenant", backref="categories")
     set_types = relationship("SetType", back_populates="category", cascade="all, delete-orphan")
     products = relationship("Product", back_populates="category")
+    models = relationship("ProductModel", back_populates="category")

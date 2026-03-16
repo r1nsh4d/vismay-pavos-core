@@ -28,7 +28,7 @@ class ProductCreate(CamelModel):
     tenant_id: uuid.UUID
     category_id: uuid.UUID
     name: str
-    model: Optional[str] = None
+    model_id: Optional[uuid.UUID] = None
     description: Optional[str] = None
     dp_price: float
     mrp: float
@@ -39,7 +39,7 @@ class ProductCreate(CamelModel):
 
 class ProductUpdate(CamelModel):
     name: Optional[str] = None
-    model: Optional[str] = None
+    model_id: Optional[uuid.UUID] = None
     description: Optional[str] = None
     dp_price: Optional[float] = None
     mrp: Optional[float] = None
@@ -52,7 +52,8 @@ class ProductResponse(CamelModel):
     tenant_id: uuid.UUID
     category_id: uuid.UUID
     name: str
-    model: Optional[str]
+    model_id: Optional[uuid.UUID] = None
+    model_name: Optional[str] = None
     description: Optional[str]
     dp_price: float
     mrp: float
