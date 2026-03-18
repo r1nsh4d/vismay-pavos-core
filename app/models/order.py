@@ -2,8 +2,7 @@ import uuid
 import enum
 from typing import Optional
 from sqlalchemy import String, ForeignKey, Boolean, Numeric, Integer, Enum, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-
+from sqlalchemy.orm import Mapped, mapped_column, relationship, backref
 from app.models.base import BaseModel
 
 
@@ -18,6 +17,7 @@ class OrderStatus(str, enum.Enum):
     rejected = "rejected"
     on_hold = "on_hold"
     estimated = "estimated"
+    partial = "partial"
     counting = "counting"
     packing = "packing"
     dispatched = "dispatched"
@@ -33,9 +33,14 @@ class Order(BaseModel):
     shop_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
     distributor_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    parent_order_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("orders.id"), nullable=True, index=True
+    )
 
     order_type: Mapped[OrderType] = mapped_column(Enum(OrderType, native_enum=False), nullable=False)
-    status: Mapped[OrderStatus] = mapped_column(Enum(OrderStatus, native_enum=False), default=OrderStatus.placed, nullable=False)
+    status: Mapped[OrderStatus] = mapped_column(
+        Enum(OrderStatus, native_enum=False), default=OrderStatus.placed, nullable=False
+    )
 
     discount_percent: Mapped[float] = mapped_column(Numeric(5, 2), default=0, nullable=False)
     subtotal: Mapped[float] = mapped_column(Numeric(10, 2), default=0, nullable=False)
@@ -50,6 +55,11 @@ class Order(BaseModel):
     distributor = relationship("User", foreign_keys=[distributor_id], backref="distributed_orders")
     creator = relationship("User", foreign_keys=[created_by], backref="created_orders")
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
+    partial_orders = relationship(
+        "Order",
+        foreign_keys="[Order.parent_order_id]",
+        backref=backref("parent_order", remote_side="Order.id"),
+    )
 
 
 class OrderItem(BaseModel):
@@ -57,7 +67,6 @@ class OrderItem(BaseModel):
 
     order_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("orders.id"), nullable=False, index=True)
     product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("products.id"), nullable=False)
-
     variant_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("product_variants.id"), nullable=True)
     set_type_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("set_types.id"), nullable=True)
 

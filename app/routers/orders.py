@@ -5,7 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.schemas.common import CommonResponse, ResponseModel, ErrorResponseModel, PaginatedResponse
-from app.schemas.order import BundleOrderCreate, IndividualOrderCreate, OrderStatusUpdate, OrderDiscountUpdate
+from app.schemas.order import (
+    BundleOrderCreate, IndividualOrderCreate,
+    OrderStatusNoteUpdate, OrderDiscountUpdate,
+)
 from app.services import orders as order_svc
 from app.models.order import OrderStatus, OrderType
 from app.models.user import User
@@ -20,6 +23,7 @@ async def search_orders(
     distributor_id: uuid.UUID | None = None,
     status: OrderStatus | None = None,
     order_type: OrderType | None = None,
+    parent_only: bool = True,
     page: int = 1,
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
@@ -28,7 +32,8 @@ async def search_orders(
     orders, total = await order_svc.search_orders(
         db, tenant_id=tenant_id, shop_id=shop_id,
         distributor_id=distributor_id, status=status,
-        order_type=order_type, page=page, limit=limit,
+        order_type=order_type, parent_only=parent_only,
+        page=page, limit=limit,
     )
     return PaginatedResponse(
         data=[order_svc.serialize_order(o) for o in orders],
@@ -75,17 +80,36 @@ async def get_order(
 @router.patch("/{order_id}/status", response_model=CommonResponse)
 async def update_order_status(
     order_id: uuid.UUID,
-    status_in: OrderStatusUpdate,
+    status_in: OrderStatusNoteUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     order = await order_svc.get_order_by_id(db, order_id)
     if not order:
         return ErrorResponseModel(code=404, message="Order not found", error={})
-    order = await order_svc.update_status(db, order, status_in.status)
+    order = await order_svc.update_status(db, order, status_in.status, notes=status_in.notes)
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
     return ResponseModel(data=order_svc.serialize_order(order), message="Order status updated")
+
+
+@router.patch("/{order_id}/estimate", response_model=CommonResponse)
+async def estimate_order(
+    order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    order = await order_svc.get_order_by_id(db, order_id)
+    if not order:
+        return ErrorResponseModel(code=404, message="Order not found", error={})
+    if order.status != OrderStatus.approved:
+        return ErrorResponseModel(
+            code=400, message="Only approved orders can be estimated", error={}
+        )
+    order = await order_svc.estimate_order(db, order)
+    await db.commit()
+    order = await order_svc.get_order_by_id(db, order.id)
+    return ResponseModel(data=order_svc.serialize_order(order), message="Order estimated")
 
 
 @router.patch("/{order_id}/discount", response_model=CommonResponse)
@@ -102,3 +126,21 @@ async def apply_discount(
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
     return ResponseModel(data=order_svc.serialize_order(order), message="Discount applied")
+
+
+@router.delete("/{order_id}", response_model=CommonResponse)
+async def delete_order(
+    order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    order = await order_svc.get_order_by_id(db, order_id)
+    if not order:
+        return ErrorResponseModel(code=404, message="Order not found", error={})
+    if order.status not in (OrderStatus.placed, OrderStatus.rejected):
+        return ErrorResponseModel(
+            code=400, message="Only placed or rejected orders can be deleted", error={}
+        )
+    await order_svc.delete_order(db, order)
+    await db.commit()
+    return ResponseModel(data=None, message="Order deleted")
