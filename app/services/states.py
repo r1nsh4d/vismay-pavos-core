@@ -12,9 +12,9 @@ def serialize_state(state: State) -> dict:
         "id": str(state.id),
         "name": state.name,
         "code": state.code,
-        "is_active": state.is_active,
-        "created_at": state.created_at.isoformat(),
-        "updated_at": state.updated_at.isoformat(),
+        "isActive": state.is_active,
+        "createdAt": state.created_at.isoformat(),
+        "updatedAt": state.updated_at.isoformat(),
     }
 
 

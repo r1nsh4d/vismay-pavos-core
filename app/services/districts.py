@@ -12,12 +12,12 @@ def serialize_district(d: District) -> dict:
     return {
         "id": str(d.id),
         "name": d.name,
-        "state_id": str(d.state_id),
-        "state_name": d.state.name if d.state else None,
-        "state_code": d.state.code if d.state else None,
-        "is_active": d.is_active,
-        "created_at": d.created_at.isoformat(),
-        "updated_at": d.updated_at.isoformat(),
+        "stateId": str(d.state_id),
+        "stateName": d.state.name if d.state else None,
+        "stateCode": d.state.code if d.state else None,
+        "isActive": d.is_active,
+        "createdAt": d.created_at.isoformat(),
+        "updatedAt": d.updated_at.isoformat(),
     }
 
 

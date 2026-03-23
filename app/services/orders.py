@@ -387,48 +387,48 @@ async def _deduct_stock_for_item(
 def serialize_order_item(item: OrderItem) -> dict:
     return {
         "id": str(item.id),
-        "product_id": str(item.product_id),
-        "variant_id": str(item.variant_id) if item.variant_id else None,
-        "set_type_id": str(item.set_type_id) if item.set_type_id else None,
+        "productId": str(item.product_id),
+        "variantId": str(item.variant_id) if item.variant_id else None,
+        "setTypeId": str(item.set_type_id) if item.set_type_id else None,
         "count": item.count,
-        "unit_price": float(item.unit_price),
-        "total_price": float(item.total_price),
+        "unitPrice": float(item.unit_price),
+        "totalPrice": float(item.total_price),
     }
 
 
 def serialize_order(order: Order) -> dict:
     return {
         "id": str(order.id),
-        "order_number": order.order_number,
-        "tenant_id": str(order.tenant_id),
-        "shop_id": str(order.shop_id),
-        "distributor_id": str(order.distributor_id) if order.distributor_id else None,
-        "created_by": str(order.created_by),
-        "parent_order_id": str(order.parent_order_id) if order.parent_order_id else None,
-        "order_type": order.order_type,
+        "orderNumber": order.order_number,
+        "tenantId": str(order.tenant_id),
+        "shopId": str(order.shop_id),
+        "distributorId": str(order.distributor_id) if order.distributor_id else None,
+        "createdBy": str(order.created_by),
+        "parentOrderId": str(order.parent_order_id) if order.parent_order_id else None,
+        "orderType": order.order_type,
         "status": order.status,
-        "discount_percent": float(order.discount_percent),
+        "discountPercent": float(order.discount_percent),
         "subtotal": float(order.subtotal),
-        "discount_amount": float(order.discount_amount),
-        "total_amount": float(order.total_amount),
+        "discountAmount": float(order.discount_amount),
+        "totalAmount": float(order.total_amount),
         "notes": order.notes,
-        "stock_deducted": order.stock_deducted,
+        "stockDeducted": order.stock_deducted,
         "items": [serialize_order_item(i) for i in order.items],
-        "partial_orders": [
+        "partialOrders": [
             {
                 "id": str(po.id),
-                "order_number": po.order_number,
+                "orderNumber": po.order_number,
                 "status": po.status,
-                "order_type": po.order_type,
+                "orderType": po.order_type,
                 "subtotal": float(po.subtotal),
-                "total_amount": float(po.total_amount),
+                "totalAmount": float(po.total_amount),
                 "notes": po.notes,
                 "items": [serialize_order_item(i) for i in po.items],
-                "created_at": po.created_at.isoformat(),
-                "updated_at": po.updated_at.isoformat(),
+                "createdAt": po.created_at.isoformat(),
+                "updatedAt": po.updated_at.isoformat(),
             }
             for po in order.partial_orders
         ],
-        "created_at": order.created_at.isoformat(),
-        "updated_at": order.updated_at.isoformat(),
+        "createdAt": order.created_at.isoformat(),
+        "updatedAt": order.updated_at.isoformat(),
     }

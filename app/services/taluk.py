@@ -13,12 +13,12 @@ def serialize_taluk(t: Taluk) -> dict:
     return {
         "id": str(t.id),
         "name": t.name,
-        "district_id": str(t.district_id),
-        "district_name": t.district.name if t.district else None,
-        "state_name": t.district.state.name if t.district and t.district.state else None,
-        "is_active": t.is_active,
-        "created_at": t.created_at.isoformat(),
-        "updated_at": t.updated_at.isoformat(),
+        "districtId": str(t.district_id),
+        "districtName": t.district.name if t.district else None,
+        "stateName": t.district.state.name if t.district and t.district.state else None,
+        "isActive": t.is_active,
+        "createdAt": t.created_at.isoformat(),
+        "updatedAt": t.updated_at.isoformat(),
     }
 
 

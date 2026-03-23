@@ -136,17 +136,17 @@ async def delete_variant(
 def serialize_product(product: Product) -> dict:
     return {
         "id": str(product.id),
-        "tenant_id": str(product.tenant_id),
-        "category_id": str(product.category_id),
-        "model_id": str(product.model_id) if product.model_id else None,
-        "model_name": product.model_ref.name if product.model_ref else None,
-        "set_type_id": str(product.set_type_id) if product.set_type_id else None,
+        "tenantId": str(product.tenant_id),
+        "categoryId": str(product.category_id),
+        "modelId": str(product.model_id) if product.model_id else None,
+        "modelName": product.model_ref.name if product.model_ref else None,
+        "setTypeId": str(product.set_type_id) if product.set_type_id else None,
         "name": product.name,
         "description": product.description,
-        "dp_price": float(product.dp_price),
+        "dpPrice": float(product.dp_price),
         "mrp": float(product.mrp),
-        "sell_type": product.sell_type,
-        "is_active": product.is_active,
+        "sellType": product.sell_type,
+        "isActive": product.is_active,
         "variants": [
             {
                 "id": str(v.id),
@@ -154,11 +154,11 @@ def serialize_product(product: Product) -> dict:
                 "pattern": v.pattern,
                 "size": v.size,
                 "sku": v.sku,
-                "image_url": v.image_url,
-                "is_active": v.is_active,
+                "imageUrl": v.image_url,
+                "isActive": v.is_active,
             }
             for v in product.variants
         ],
-        "created_at": product.created_at.isoformat(),
-        "updated_at": product.updated_at.isoformat(),
+        "createdAt": product.created_at.isoformat(),
+        "updatedAt": product.updated_at.isoformat(),
     }

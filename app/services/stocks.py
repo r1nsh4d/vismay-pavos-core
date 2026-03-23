@@ -154,16 +154,16 @@ async def get_stock_by_set_type(db: AsyncSession, product_id: uuid.UUID, set_typ
 
 def serialize_bundle_stock(bs: BundleStock) -> dict:
     return {
-        "set_type_id": bs.set_type_id,
-        "set_type_name": bs.set_type.name if bs.set_type else None,
-        "bundle_count": bs.bundle_count,
+        "setTypeId": bs.set_type_id,
+        "setTypeName": bs.set_type.name if bs.set_type else None,
+        "bundleCount": bs.bundle_count,
     }
 
 def serialize_stock(stock: Stock) -> dict:
     return {
         "id": stock.id,
-        "variant_id": stock.variant_id,
-        "individual_count": stock.individual_count,
-        "bundle_stocks": [serialize_bundle_stock(bs) for bs in stock.bundle_stocks],
+        "variantId": stock.variant_id,
+        "individualCount": stock.individual_count,
+        "bundleStocks": [serialize_bundle_stock(bs) for bs in stock.bundle_stocks],
     }
 

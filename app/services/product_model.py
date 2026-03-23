@@ -51,10 +51,10 @@ async def delete_model(db: AsyncSession, model: ProductModel) -> None:
 def serialize_model(model: ProductModel) -> dict:
     return {
         "id": str(model.id),
-        "category_id": str(model.category_id),
+        "categoryId": str(model.category_id),
         "name": model.name,
         "description": model.description,
-        "is_active": model.is_active,
-        "created_at": model.created_at.isoformat(),
-        "updated_at": model.updated_at.isoformat(),
+        "isActive": model.is_active,
+        "createdAt": model.created_at.isoformat(),
+        "updatedAt": model.updated_at.isoformat(),
     }
