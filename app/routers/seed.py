@@ -349,7 +349,7 @@ async def run_seed(db: AsyncSession = Depends(get_db)):
     # Step 8: Seed super admin user
     exists = await db.scalar(select(User).where(User.email == SUPER_ADMIN["email"]))
     if not exists:
-        db.add(User(
+        super_user = User(
             role_id=role_map.get("super_admin"),
             username=SUPER_ADMIN["username"],
             first_name=SUPER_ADMIN["first_name"],
@@ -359,9 +359,18 @@ async def run_seed(db: AsyncSession = Depends(get_db)):
             password_hash=AuthMgmt.get_password_hash(SUPER_ADMIN["password"]),
             is_active=True,
             is_verified=True,
-        ))
+        )
+        db.add(super_user)
         await db.flush()
+
+        # Assign all tenants to super admin
+        all_tenants = (await db.execute(select(Tenant))).scalars().all()
+        for tenant in all_tenants:
+            db.add(UserTenant(user_id=super_user.id, tenant_id=tenant.id, is_active=True))
+        await db.flush()
+
         results["super_admin"] = SUPER_ADMIN["email"]
+        results["super_admin_tenants"] = [t.code for t in all_tenants]
     else:
         results["super_admin"] = "already exists"
 
