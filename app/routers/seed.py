@@ -206,6 +206,7 @@ async def run_seed(db: AsyncSession = Depends(get_db)):
         "permissions_seeded":        [],
         "role_permissions_assigned": {},
         "super_admin":               None,
+        "super_admin_tenants": []
     }
 
     # Step 2: Seed Kerala state
