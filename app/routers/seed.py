@@ -28,6 +28,9 @@ router = APIRouter(tags=["Seed"])
 
 SAMPLE_TENANTS = [
     {"name": "Channel Fashion", "code": "CHANNEL_FASHION"},
+    {"name": "Channel Intimates", "code": "CHANNEL_INTIMATES"},
+    {"name": "Shop In Shop", "code": "SIS"},
+    {"name": "Retail or EBO", "code": "RETAIL"}
 ]
 
 KERALA_STATE = {"name": "Kerala", "code": "KL"}

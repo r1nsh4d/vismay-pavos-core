@@ -5,10 +5,11 @@ import uuid
 
 from app.core.exceptions import AppException
 from app.database import get_db
+from app.models import User
 from app.schemas.user import UserCreate, UserUpdate
 from app.schemas.common import CommonResponse, ResponseModel, PaginatedResponse
 from app.services import users as user_mgmt
-from app.dependencies import require_roles
+from app.dependencies import require_roles, get_current_user
 
 router = APIRouter(
     prefix="/users", tags=["Users"],
@@ -101,11 +102,21 @@ async def update_user(user_id: uuid.UUID, user_in: UserUpdate, db: AsyncSession 
 
 
 @router.delete("/{user_id}", response_model=CommonResponse)
-async def delete_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def delete_user(
+        user_id: uuid.UUID,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+):
     user = await user_mgmt.get_user_by_id(db, user_id)
     if not user:
         raise AppException(status_code=404, detail="User not found")
-    await user_mgmt.delete_user(db, user)
+
+    # Prevent self-deletion
+    if user.id == current_user.id:
+        raise AppException(status_code=400, detail="Cannot delete your own account")
+
+    await user_mgmt.soft_delete_user(db, user)
+    await db.commit()
     return ResponseModel(data=None, message="User deleted successfully")
 
 

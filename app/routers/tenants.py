@@ -78,5 +78,6 @@ async def delete_tenant(tenant_id: uuid.UUID, db: AsyncSession = Depends(get_db)
     if not tenant:
         raise AppException(status_code=404, detail="Tenant not found")
 
-    await tenant_mgmt.delete_tenant(db, tenant)
+    await tenant_mgmt.soft_delete_tenant(db, tenant)
+    await db.commit()
     return ResponseModel(data=None, message="Tenant deleted")

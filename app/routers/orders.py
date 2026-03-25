@@ -141,6 +141,99 @@ async def delete_order(
         return ErrorResponseModel(
             code=400, message="Only placed or rejected orders can be deleted", error={}
         )
-    await order_svc.delete_order(db, order)
+    await order_svc.soft_delete_order(db, order)
     await db.commit()
     return ResponseModel(data=None, message="Order deleted")
+
+
+# 1. Approve order (placed → approved)
+@router.patch("/{order_id}/approve", response_model=CommonResponse)
+async def approve_order(
+    order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    order = await order_svc.get_order_by_id(db, order_id)
+    if not order:
+        return ErrorResponseModel(code=404, message="Order not found", error={})
+    if order.status != OrderStatus.placed:
+        return ErrorResponseModel(code=400, message="Only placed orders can be approved", error={})
+    order = await order_svc.update_status(db, order, OrderStatus.approved)
+    await db.commit()
+    order = await order_svc.get_order_by_id(db, order.id)
+    return ResponseModel(data=order_svc.serialize_order(order), message="Order approved")
+
+
+# 2. Reject order (placed → rejected)
+@router.patch("/{order_id}/reject", response_model=CommonResponse)
+async def reject_order(
+    order_id: uuid.UUID,
+    status_in: OrderStatusNoteUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    order = await order_svc.get_order_by_id(db, order_id)
+    if not order:
+        return ErrorResponseModel(code=404, message="Order not found", error={})
+    if order.status != OrderStatus.placed:
+        return ErrorResponseModel(code=400, message="Only placed orders can be rejected", error={})
+    order = await order_svc.update_status(db, order, OrderStatus.rejected, notes=status_in.notes)
+    await db.commit()
+    order = await order_svc.get_order_by_id(db, order.id)
+    return ResponseModel(data=order_svc.serialize_order(order), message="Order rejected")
+
+
+# 3. Mark order as delivered (estimated → delivered)
+@router.patch("/{order_id}/deliver", response_model=CommonResponse)
+async def deliver_order(
+    order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    order = await order_svc.get_order_by_id(db, order_id)
+    if not order:
+        return ErrorResponseModel(code=404, message="Order not found", error={})
+    if order.status != OrderStatus.estimated:
+        return ErrorResponseModel(code=400, message="Only estimated orders can be delivered", error={})
+    order = await order_svc.update_status(db, order, OrderStatus.delivered)
+    await db.commit()
+    order = await order_svc.get_order_by_id(db, order.id)
+    return ResponseModel(data=order_svc.serialize_order(order), message="Order marked as delivered")
+
+
+# 4. Get orders by shop
+@router.get("/shop/{shop_id}", response_model=CommonResponse)
+async def get_orders_by_shop(
+    shop_id: uuid.UUID,
+    status: OrderStatus | None = None,
+    page: int = 1,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    orders, total = await order_svc.search_orders(
+        db, shop_id=shop_id, status=status, page=page, limit=limit
+    )
+    return PaginatedResponse(
+        data=[order_svc.serialize_order(o) for o in orders],
+        message="Shop orders fetched", page=page, limit=limit, total=total,
+    )
+
+
+# 5. Get orders by distributor
+@router.get("/distributor/{distributor_id}", response_model=CommonResponse)
+async def get_orders_by_distributor(
+    distributor_id: uuid.UUID,
+    status: OrderStatus | None = None,
+    page: int = 1,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    orders, total = await order_svc.search_orders(
+        db, distributor_id=distributor_id, status=status, page=page, limit=limit
+    )
+    return PaginatedResponse(
+        data=[order_svc.serialize_order(o) for o in orders],
+        message="Distributor orders fetched", page=page, limit=limit, total=total,
+    )

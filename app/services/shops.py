@@ -12,10 +12,15 @@ from app.schemas.shop import ShopCreate, ShopUpdate
 
 
 def _shop_query():
-    return select(Shop).options(
+    return select(Shop).where(Shop.is_deleted == False).options(
         selectinload(Shop.district).selectinload(District.state),
         selectinload(Shop.taluk),
     )
+
+
+async def soft_delete_shop(db: AsyncSession, shop: Shop) -> None:
+    shop.is_deleted = True
+    await db.flush()
 
 
 async def get_shop_by_id(db: AsyncSession, shop_id: uuid.UUID) -> Optional[Shop]:

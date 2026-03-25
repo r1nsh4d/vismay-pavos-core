@@ -15,8 +15,9 @@ from app.core.security import AuthMgmt
 
 # ── Query helper ───────────────────────────────────────────────────────────────
 
+# 1. Update _user_query() to exclude soft-deleted users
 def _user_query():
-    return select(User).options(
+    return select(User).where(User.is_deleted == False).options(
         selectinload(User.role)
             .selectinload(Role.role_permissions)
             .selectinload(RolePermission.permission),
@@ -24,8 +25,14 @@ def _user_query():
             .selectinload(UserTenant.tenant),
         selectinload(User.user_districts)
             .selectinload(UserDistrict.district)
-            .selectinload(District.state),   # ← loads state for district
+            .selectinload(District.state),
     )
+
+
+# 2. Replace delete_user with soft delete
+async def soft_delete_user(db: AsyncSession, user: User) -> None:
+    user.is_deleted = True
+    await db.flush()
 
 
 async def hydrate_user(db: AsyncSession, user_id: uuid.UUID) -> User:

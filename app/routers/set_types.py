@@ -47,5 +47,6 @@ async def delete_set_type(set_type_id: uuid.UUID, db: AsyncSession = Depends(get
     st = await st_svc.get_set_type_by_id(db, set_type_id)
     if not st:
         return ErrorResponseModel(code=404, message="Set type not found", error={})
-    await st_svc.delete_set_type(db, st)
+    await st_svc.soft_delete_set_type(db, st)
+    await db.commit()
     return ResponseModel(data=None, message="Set type deleted")

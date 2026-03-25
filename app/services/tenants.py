@@ -7,13 +7,21 @@ from app.models import Tenant
 from app.schemas.tenant import TenantCreate
 
 
+def _tenant_query():
+    return select(Tenant).where(Tenant.is_deleted == False)
+
+
 async def get_tenant_by_id(db: AsyncSession, tenant_id: uuid.UUID) -> Tenant | None:
-    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    result = await db.execute(
+        _tenant_query().where(Tenant.id == tenant_id)
+    )
     return result.scalar_one_or_none()
 
 
 async def get_tenant_by_code(db: AsyncSession, code: str) -> Tenant | None:
-    result = await db.execute(select(Tenant).where(Tenant.code == code))
+    result = await db.execute(
+        _tenant_query().where(Tenant.code == code)
+    )
     return result.scalar_one_or_none()
 
 
@@ -23,15 +31,15 @@ async def get_all_tenants(
     page: int = 1,
     limit: int = 20,
 ) -> tuple[List[Tenant], int]:
-    query = select(Tenant)
+    query = _tenant_query()
+
     if is_active is not None:
         query = query.where(Tenant.is_active == is_active)
 
     total_result = await db.execute(select(func.count()).select_from(query.subquery()))
-    total = total_result.scalar()
+    total = total_result.scalar() or 0
 
-    query = query.offset((page - 1) * limit).limit(limit)
-    result = await db.execute(query)
+    result = await db.execute(query.offset((page - 1) * limit).limit(limit))
     return result.scalars().all(), total
 
 
@@ -55,6 +63,6 @@ async def toggle_tenant_active(db: AsyncSession, tenant: Tenant) -> Tenant:
     return tenant
 
 
-async def delete_tenant(db: AsyncSession, tenant: Tenant) -> None:
-    await db.delete(tenant)
+async def soft_delete_tenant(db: AsyncSession, tenant: Tenant) -> None:
+    tenant.is_deleted = True
     await db.flush()

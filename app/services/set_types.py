@@ -3,12 +3,17 @@ from typing import List, Tuple
 from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
 from app.models.set_type import SetType, SetTypeItem
+from app.models.product import Product
 from app.schemas.set_type import SetTypeCreate, SetTypeUpdate
+from app.core.exceptions import AppException
 
 
 def _set_type_query():
-    return select(SetType).options(selectinload(SetType.items))
+    return select(SetType).where(SetType.is_deleted == False).options(
+        selectinload(SetType.items)
+    )
 
 
 async def get_set_type_by_id(db: AsyncSession, set_type_id: uuid.UUID) -> SetType | None:
@@ -23,13 +28,13 @@ async def get_all_set_types(
     limit: int = 20,
 ) -> Tuple[List[SetType], int]:
     query = _set_type_query()
+
     if category_id:
         query = query.where(SetType.category_id == category_id)
 
-    total = (await db.execute(select(func.count()).select_from(
-        select(SetType).where(SetType.category_id == category_id).subquery()
-        if category_id else select(SetType).subquery()
-    ))).scalar() or 0
+    total = (await db.execute(
+        select(func.count()).select_from(query.subquery())
+    )).scalar() or 0
 
     result = await db.execute(query.offset((page - 1) * limit).limit(limit))
     return result.scalars().all(), total
@@ -64,7 +69,6 @@ async def update_set_type(db: AsyncSession, st: SetType, st_in: SetTypeUpdate) -
         st.is_active = st_in.is_active
 
     if st_in.items is not None:
-        # Replace all items
         await db.execute(delete(SetTypeItem).where(SetTypeItem.set_type_id == st.id))
         for item in st_in.items:
             db.add(SetTypeItem(set_type_id=st.id, size=item.size, quantity=item.quantity))
@@ -75,6 +79,21 @@ async def update_set_type(db: AsyncSession, st: SetType, st_in: SetTypeUpdate) -
     return result.scalar_one()
 
 
-async def delete_set_type(db: AsyncSession, st: SetType) -> None:
-    await db.delete(st)
+async def soft_delete_set_type(db: AsyncSession, st: SetType) -> None:
+    product_count = (await db.execute(
+        select(func.count()).select_from(
+            select(Product).where(
+                Product.set_type_id == st.id,
+                Product.is_deleted == False,
+            ).subquery()
+        )
+    )).scalar() or 0
+
+    if product_count > 0:
+        raise AppException(
+            status_code=400,
+            detail=f"Cannot delete set type assigned to {product_count} active product(s)"
+        )
+
+    st.is_deleted = True
     await db.flush()

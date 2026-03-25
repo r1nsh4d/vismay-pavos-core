@@ -2,12 +2,19 @@ import uuid
 from typing import List, Tuple
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models.category import Category
+from app.models.product import Product
 from app.schemas.category import CategoryCreate, CategoryUpdate
+from app.core.exceptions import AppException
+
+
+def _base_query():
+    return select(Category).where(Category.is_deleted == False)
 
 
 async def get_category_by_id(db: AsyncSession, category_id: uuid.UUID) -> Category | None:
-    result = await db.execute(select(Category).where(Category.id == category_id))
+    result = await db.execute(_base_query().where(Category.id == category_id))
     return result.scalar_one_or_none()
 
 
@@ -18,7 +25,8 @@ async def get_all_categories(
     page: int = 1,
     limit: int = 20,
 ) -> Tuple[List[Category], int]:
-    query = select(Category)
+    query = _base_query()
+
     if tenant_id:
         query = query.where(Category.tenant_id == tenant_id)
     if is_active is not None:
@@ -43,6 +51,21 @@ async def update_category(db: AsyncSession, cat: Category, cat_in: CategoryUpdat
     return cat
 
 
-async def delete_category(db: AsyncSession, cat: Category) -> None:
-    await db.delete(cat)
+async def soft_delete_category(db: AsyncSession, cat: Category) -> None:
+    product_count = (await db.execute(
+        select(func.count()).select_from(
+            select(Product).where(
+                Product.category_id == cat.id,
+                Product.is_deleted == False,
+            ).subquery()
+        )
+    )).scalar() or 0
+
+    if product_count > 0:
+        raise AppException(
+            status_code=400,
+            detail=f"Cannot delete category with {product_count} active product(s) assigned"
+        )
+
+    cat.is_deleted = True
     await db.flush()

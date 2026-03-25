@@ -73,20 +73,6 @@ async def update_product(
     return ResponseModel(data=product_svc.serialize_product(product), message="Product updated")
 
 
-@router.delete("/{product_id}", response_model=CommonResponse)
-async def delete_product(
-    product_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    product = await product_svc.get_product_by_id(db, product_id)
-    if not product:
-        return ErrorResponseModel(code=404, message="Product not found", error={})
-    await product_svc.delete_product(db, product)
-    await db.commit()
-    return ResponseModel(data=None, message="Product deleted")
-
-
 @router.post("/{product_id}/variants", response_model=CommonResponse)
 async def add_variant(
     product_id: uuid.UUID,
@@ -120,6 +106,20 @@ async def update_variant(
     return ResponseModel(data=ProductVariantResponse.model_validate(variant), message="Variant updated")
 
 
+@router.delete("/{product_id}", response_model=CommonResponse)
+async def delete_product(
+    product_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    product = await product_svc.get_product_by_id(db, product_id)
+    if not product:
+        return ErrorResponseModel(code=404, message="Product not found", error={})
+    await product_svc.soft_delete_product(db, product)
+    await db.commit()
+    return ResponseModel(data=None, message="Product deleted")
+
+
 @router.delete("/{product_id}/variants/{variant_id}", response_model=CommonResponse)
 async def delete_variant(
     product_id: uuid.UUID,
@@ -130,7 +130,7 @@ async def delete_variant(
     product = await product_svc.get_product_by_id(db, product_id)
     if not product:
         return ErrorResponseModel(code=404, message="Product not found", error={})
-    deleted = await product_svc.delete_variant(db, product_id, variant_id)
+    deleted = await product_svc.soft_delete_variant(db, product_id, variant_id)
     if not deleted:
         return ErrorResponseModel(code=404, message="Variant not found", error={})
     await db.commit()

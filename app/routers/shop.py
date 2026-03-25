@@ -90,5 +90,6 @@ async def delete_shop(shop_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     shop = await shop_svc.get_shop_by_id(db, shop_id)
     if not shop:
         return ErrorResponseModel(code=404, message="Shop not found", error={})
-    await shop_svc.delete_shop(db, shop)
+    await shop_svc.soft_delete_shop(db, shop)
+    await db.commit()
     return ResponseModel(data=None, message="Shop deleted successfully")

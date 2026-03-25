@@ -52,5 +52,6 @@ async def delete_category(category_id: uuid.UUID, db: AsyncSession = Depends(get
     cat = await cat_svc.get_category_by_id(db, category_id)
     if not cat:
         return ErrorResponseModel(code=404, message="Category not found", error={})
-    await cat_svc.delete_category(db, cat)
+    await cat_svc.soft_delete_category(db, cat)
+    await db.commit()
     return ResponseModel(data=None, message="Category deleted")

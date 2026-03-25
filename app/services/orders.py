@@ -14,10 +14,15 @@ from app.core.exceptions import AppException
 
 
 def _order_query():
-    return select(Order).options(
+    return select(Order).where(Order.is_deleted == False).options(
         selectinload(Order.items),
         selectinload(Order.partial_orders).selectinload(Order.items),
     )
+
+
+async def soft_delete_order(db: AsyncSession, order: Order) -> None:
+    order.is_deleted = True
+    await db.flush()
 
 
 async def get_order_by_id(db: AsyncSession, order_id: uuid.UUID) -> Optional[Order]:
