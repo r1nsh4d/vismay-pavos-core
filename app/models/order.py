@@ -13,10 +13,13 @@ class OrderType(str, enum.Enum):
 
 class OrderStatus(str, enum.Enum):
     placed = "placed"
+    verified = "verified"
+    assigned = "assigned"
     approved = "approved"
-    rejected = "rejected"
     on_hold = "on_hold"
+    rejected = "rejected"
     estimated = "estimated"
+    billed = "billed"
     partial = "partial"
     counting = "counting"
     packing = "packing"
@@ -31,15 +34,29 @@ class Order(BaseModel):
     order_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
     shop_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
-    distributor_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+
+    # Who created the order (admin / scm / executive)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    # Executive who owns/is responsible for this order
+    assigned_executive: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
+
+    # Distributor who will distribute this order
+    distributor_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
+
     parent_order_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("orders.id"), nullable=True, index=True
     )
 
     order_type: Mapped[OrderType] = mapped_column(Enum(OrderType, native_enum=False), nullable=False)
     status: Mapped[OrderStatus] = mapped_column(
-        Enum(OrderStatus, native_enum=False), default=OrderStatus.placed, nullable=False
+        Enum(OrderStatus, native_enum=False),
+        default=OrderStatus.placed,
+        nullable=False,
     )
 
     discount_percent: Mapped[float] = mapped_column(Numeric(5, 2), default=0, nullable=False)
@@ -50,10 +67,17 @@ class Order(BaseModel):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     stock_deducted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Delivery info
+    delivery_partner: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    tracking_number: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    delivery_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Relationships
     tenant = relationship("Tenant", backref="orders")
     shop = relationship("Shop", backref="orders")
-    distributor = relationship("User", foreign_keys=[distributor_id], backref="distributed_orders")
     creator = relationship("User", foreign_keys=[created_by], backref="created_orders")
+    executive = relationship("User", foreign_keys=[assigned_executive], backref="executive_orders")
+    distributor = relationship("User", foreign_keys=[distributor_id], backref="distributed_orders")
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     partial_orders = relationship(
         "Order",

@@ -5,6 +5,8 @@ from app.models.order import OrderType, OrderStatus
 from app.schemas.base import CamelModel
 
 
+# ── Create schemas ─────────────────────────────────────────────────────────────
+
 class BundleOrderItemCreate(CamelModel):
     product_id: uuid.UUID
     set_type_id: uuid.UUID
@@ -21,6 +23,7 @@ class BundleOrderCreate(CamelModel):
     tenant_id: uuid.UUID
     shop_id: uuid.UUID
     distributor_id: Optional[uuid.UUID] = None
+    assigned_executive: Optional[uuid.UUID] = None  # admin can assign to executive
     notes: Optional[str] = None
     items: List[BundleOrderItemCreate]
 
@@ -29,18 +32,32 @@ class IndividualOrderCreate(CamelModel):
     tenant_id: uuid.UUID
     shop_id: uuid.UUID
     distributor_id: Optional[uuid.UUID] = None
+    assigned_executive: Optional[uuid.UUID] = None  # admin can assign to executive
     notes: Optional[str] = None
     items: List[IndividualOrderItemCreate]
 
 
-class OrderStatusNoteUpdate(CamelModel):
-    status: OrderStatus
+# ── Update schemas ─────────────────────────────────────────────────────────────
+
+class OrderNoteUpdate(CamelModel):
     notes: Optional[str] = None
 
 
 class OrderDiscountUpdate(CamelModel):
     discount_percent: float
 
+
+class OrderAssignDistributorInput(CamelModel):
+    distributor_id: uuid.UUID
+
+
+class OrderDispatchInput(CamelModel):
+    delivery_partner: str
+    tracking_number: Optional[str] = None
+    delivery_notes: Optional[str] = None
+
+
+# ── Response schemas ───────────────────────────────────────────────────────────
 
 class OrderItemResponse(CamelModel):
     id: uuid.UUID
@@ -70,8 +87,9 @@ class OrderResponse(CamelModel):
     order_number: str
     tenant_id: uuid.UUID
     shop_id: uuid.UUID
-    distributor_id: Optional[uuid.UUID] = None
     created_by: uuid.UUID
+    assigned_executive: Optional[uuid.UUID] = None
+    distributor_id: Optional[uuid.UUID] = None
     parent_order_id: Optional[uuid.UUID] = None
     order_type: OrderType
     status: OrderStatus
@@ -81,6 +99,9 @@ class OrderResponse(CamelModel):
     total_amount: float
     notes: Optional[str] = None
     stock_deducted: bool
+    delivery_partner: Optional[str] = None
+    tracking_number: Optional[str] = None
+    delivery_notes: Optional[str] = None
     items: List[OrderItemResponse] = []
     partial_orders: List[PartialOrderResponse] = []
     created_at: datetime

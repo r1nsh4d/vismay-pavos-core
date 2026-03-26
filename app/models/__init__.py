@@ -11,8 +11,9 @@ from app.models.category import Category
 from app.models.product_model import ProductModel
 from app.models.set_type import SetType, SetTypeItem
 from app.models.product import Product, ProductVariant, SellType
-from app.models.stock import Stock
+from app.models.stock import Stock, BundleStock
 from app.models.order import Order, OrderItem, OrderStatus, OrderType
+from app.models.target import ExecutiveTarget, TargetType       # ← new
 from app.models.base import BaseModel
 from app.database import Base
 
@@ -34,13 +35,16 @@ __all__ = [
     "Category",
     "SetType",
     "SetTypeItem",
-
+    "ProductModel",
     "Product",
     "ProductVariant",
     "SellType",
     "Stock",
+    "BundleStock",
     "Order",
     "OrderItem",
     "OrderStatus",
     "OrderType",
+    "ExecutiveTarget",
+    "TargetType",
 ]
