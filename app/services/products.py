@@ -8,6 +8,7 @@ from app.models import SetType
 from app.models.product import Product, ProductVariant
 from app.models.stock import Stock, BundleStock
 from app.schemas.product import ProductCreate, ProductUpdate, ProductVariantCreate
+from app.services.storage_service import delete_variant_image
 
 
 def _product_query():
@@ -40,6 +41,10 @@ async def soft_delete_variant(
     variant = result.scalar_one_or_none()
     if not variant:
         return False
+
+    # Clean up images from OSS before soft-deleting
+    await delete_variant_image(variant.image_url, variant.thumbnail_url)
+
     variant.is_deleted = True
     await db.flush()
     return True
@@ -193,6 +198,7 @@ def serialize_variant_with_stock(v: ProductVariant) -> dict:
         "size": v.size,
         "sku": v.sku,
         "imageUrl": v.image_url,
+        "thumbnailUrl": v.thumbnail_url,
         "isActive": v.is_active,
         "individualCount": stock.individual_count if stock else 0,
         "bundleStocks": bundle_stocks,

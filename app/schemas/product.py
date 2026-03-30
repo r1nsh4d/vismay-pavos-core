@@ -11,6 +11,7 @@ class ProductVariantCreate(CamelModel):
     size: Optional[str] = None
     sku: Optional[str] = None
     image_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
 
 
 class ProductVariantResponse(CamelModel):
@@ -20,6 +21,7 @@ class ProductVariantResponse(CamelModel):
     size: Optional[str]
     sku: Optional[str]
     image_url: Optional[str]
+    thumbnail_url: Optional[str]
     is_active: bool
     model_config = {"from_attributes": True}
 

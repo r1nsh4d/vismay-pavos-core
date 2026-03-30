@@ -43,6 +43,7 @@ class ProductVariant(BaseModel):
     size: Mapped[Optional[str]] = mapped_column(String(20))
     sku: Mapped[Optional[str]] = mapped_column(String(100), unique=True, index=True)
     image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    thumbnail_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     product = relationship("Product", back_populates="variants")
