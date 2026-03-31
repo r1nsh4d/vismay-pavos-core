@@ -2,6 +2,7 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
+from app.models import SellType
 from app.schemas.common import CommonResponse, ResponseModel, ErrorResponseModel, PaginatedResponse
 from app.schemas.product import ProductCreate, ProductUpdate, ProductVariantCreate, ProductVariantResponse
 from app.services import products as product_svc
@@ -18,6 +19,7 @@ async def search_products(
     category_id: uuid.UUID | None = None,
     model_id: uuid.UUID | None = None,
     is_active: bool | None = None,
+    sell_type: SellType | None = None,  # ← new
     page: int = 1,
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
@@ -25,7 +27,9 @@ async def search_products(
 ):
     products, total = await product_svc.search_products(
         db, q=q, tenant_id=tenant_id, category_id=category_id,
-        model_id=model_id, is_active=is_active, page=page, limit=limit,
+        model_id=model_id, is_active=is_active,
+        sell_type=sell_type,  # ← new
+        page=page, limit=limit,
     )
     return PaginatedResponse(
         data=[product_svc.serialize_product(p) for p in products],

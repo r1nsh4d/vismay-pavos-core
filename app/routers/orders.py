@@ -1,4 +1,6 @@
 import uuid
+from datetime import date
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +30,8 @@ async def search_orders(
     status: OrderStatus | None = None,
     order_type: OrderType | None = None,
     parent_only: bool = True,
+    date_from: date | None = None,   # ← new  e.g. 2026-03-01
+    date_to: date | None = None,     # ← new  e.g. 2026-03-31
     page: int = 1,
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
@@ -38,7 +42,9 @@ async def search_orders(
         distributor_id=distributor_id,
         assigned_executive=assigned_executive,
         status=status, order_type=order_type,
-        parent_only=parent_only, page=page, limit=limit,
+        parent_only=parent_only,
+        date_from=date_from, date_to=date_to,
+        page=page, limit=limit,
     )
     return PaginatedResponse(
         data=[order_svc.serialize_order(o) for o in orders],
@@ -49,15 +55,18 @@ async def search_orders(
 @router.get("/my", response_model=CommonResponse)
 async def get_my_orders(
     status: OrderStatus | None = None,
+    date_from: date | None = None,   # ← new
+    date_to: date | None = None,     # ← new
     page: int = 1,
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Executive sees only their own orders."""
     orders, total = await order_svc.search_orders(
         db, assigned_executive=current_user.id,
-        status=status, page=page, limit=limit,
+        status=status,
+        date_from=date_from, date_to=date_to,
+        page=page, limit=limit,
     )
     return PaginatedResponse(
         data=[order_svc.serialize_order(o) for o in orders],

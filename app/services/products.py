@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models import SetType
-from app.models.product import Product, ProductVariant
+from app.models.product import Product, ProductVariant, SellType
 from app.models.stock import Stock, BundleStock
 from app.schemas.product import ProductCreate, ProductUpdate, ProductVariantCreate
 from app.services.storage_service import delete_variant_image
@@ -88,6 +88,7 @@ async def search_products(
     category_id: Optional[uuid.UUID] = None,
     model_id: Optional[uuid.UUID] = None,
     is_active: Optional[bool] = None,
+    sell_type: Optional[SellType] = None,  # ← new
     page: int = 1,
     limit: int = 20,
 ) -> Tuple[List[Product], int]:
@@ -103,6 +104,8 @@ async def search_products(
         query = query.where(Product.model_id == model_id)
     if is_active is not None:
         query = query.where(Product.is_active == is_active)
+    if sell_type is not None:
+        query = query.where(Product.sell_type == sell_type)  # ← new
 
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
     result = await db.execute(query.offset((page - 1) * limit).limit(limit))

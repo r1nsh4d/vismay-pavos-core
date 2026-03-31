@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, List, Tuple
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +38,8 @@ async def search_orders(
     status: Optional[OrderStatus] = None,
     order_type: Optional[OrderType] = None,
     parent_only: bool = True,
+    date_from: Optional[date] = None,   # ← new
+    date_to: Optional[date] = None,     # ← new
     page: int = 1,
     limit: int = 20,
 ) -> Tuple[List[Order], int]:
@@ -57,6 +59,10 @@ async def search_orders(
         query = query.where(Order.status == status)
     if order_type:
         query = query.where(Order.order_type == order_type)
+    if date_from:
+        query = query.where(Order.created_at >= datetime.combine(date_from, datetime.min.time()))
+    if date_to:
+        query = query.where(Order.created_at <= datetime.combine(date_to, datetime.max.time()))
 
     total = (await db.execute(
         select(func.count()).select_from(query.subquery()))
