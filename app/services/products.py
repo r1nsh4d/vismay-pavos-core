@@ -105,7 +105,14 @@ async def search_products(
     if is_active is not None:
         query = query.where(Product.is_active == is_active)
     if sell_type is not None:
-        query = query.where(Product.sell_type == sell_type)  # ← new
+         if sell_type == "bundle":
+             allowed = ["bundle", "both"]
+         elif sell_type == "individual":
+             allowed = ["individual", "both"]
+         else:
+            allowed = ["both"]
+         query = query.where(Product.sell_type.in_(allowed))
+
 
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
     result = await db.execute(query.offset((page - 1) * limit).limit(limit))
