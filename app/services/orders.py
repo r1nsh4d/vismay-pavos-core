@@ -225,8 +225,11 @@ async def _restore_all_stock(db: AsyncSession, order: Order) -> None:
 
 # ── Totals ─────────────────────────────────────────────────────────────────────
 
-def _recalculate_totals(order: Order) -> None:
-    subtotal = sum(float(i.total_price) for i in order.items)
+def _recalculate_totals(order: Order, items=None) -> None:
+    # use passed items list if provided, otherwise fall back to order.items
+    # (order.items is safe only when loaded via selectinload)
+    source = items if items is not None else order.items
+    subtotal = sum(float(i.total_price) for i in source)
     percent_discount = round(subtotal * float(order.discount_percent) / 100, 2)
     flat_discount = float(order.discount_flat)
     discount_amount = round(min(percent_discount + flat_discount, subtotal), 2)
@@ -285,7 +288,7 @@ async def create_bundle_order(
         order_items.append(oi)
 
     await db.flush()
-    _recalculate_totals(order)
+    _recalculate_totals(order, items=order_items)
 
     for oi in order_items:
         await _deduct_stock_for_item(db, oi, OrderType.bundle, oi.count)
@@ -351,7 +354,7 @@ async def create_individual_order(
         order_items.append(oi)
 
     await db.flush()
-    _recalculate_totals(order)
+    _recalculate_totals(order, items=order_items)
 
     for oi in order_items:
         await _deduct_stock_for_item(db, oi, OrderType.individual, oi.count)
