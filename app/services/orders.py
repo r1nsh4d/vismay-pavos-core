@@ -5,24 +5,42 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.order import Order, OrderItem, OrderStatus, OrderType
+from app.models.order import (
+    Order, OrderItem, OrderReturn, OrderStatus, OrderType, ReturnType,
+    CANCELLABLE_STATUSES, STOCK_RESTORE_STATUSES,
+)
 from app.models.product import Product, ProductVariant
 from app.models.set_type import SetType, SetTypeItem
-from app.models.stock import Stock, BundleStock
-from app.schemas.order import BundleOrderCreate, IndividualOrderCreate
+from app.models.stock import Stock
+from app.schemas.order import BundleOrderCreate, IndividualOrderCreate, SplitOrderInput, CreateOrderReturnInput
 from app.core.exceptions import AppException
 
 
-# ── Query helper ───────────────────────────────────────────────────────────────
+# ── Query ──────────────────────────────────────────────────────────────────────
 
 def _order_query():
-    return select(Order).where(Order.is_deleted == False).options(
-        selectinload(Order.items),
-        selectinload(Order.partial_orders).selectinload(Order.items),
+    return (
+        select(Order)
+        .where(Order.is_deleted == False)  # noqa
+        .options(
+            selectinload(Order.items).selectinload(OrderItem.product),
+            selectinload(Order.items).selectinload(OrderItem.variant),
+            selectinload(Order.items).selectinload(OrderItem.set_type),
+            selectinload(Order.child_orders).selectinload(Order.items).selectinload(OrderItem.product),
+            selectinload(Order.child_orders).selectinload(Order.items).selectinload(OrderItem.variant),
+            selectinload(Order.child_orders).selectinload(Order.items).selectinload(OrderItem.set_type),
+            selectinload(Order.order_returns).selectinload(OrderReturn.product),
+            selectinload(Order.order_returns).selectinload(OrderReturn.variant),
+            selectinload(Order.order_returns).selectinload(OrderReturn.set_type),
+            selectinload(Order.order_returns).selectinload(OrderReturn.processor),
+            selectinload(Order.shop),
+            selectinload(Order.creator),
+            selectinload(Order.executive),
+            selectinload(Order.distributor),
+            selectinload(Order.tenant),
+        )
     )
 
-
-# ── Fetch ──────────────────────────────────────────────────────────────────────
 
 async def get_order_by_id(db: AsyncSession, order_id: uuid.UUID) -> Optional[Order]:
     result = await db.execute(_order_query().where(Order.id == order_id))
@@ -38,8 +56,8 @@ async def search_orders(
     status: Optional[OrderStatus] = None,
     order_type: Optional[OrderType] = None,
     parent_only: bool = True,
-    date_from: Optional[date] = None,   # ← new
-    date_to: Optional[date] = None,     # ← new
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
     page: int = 1,
     limit: int = 20,
 ) -> Tuple[List[Order], int]:
@@ -65,8 +83,8 @@ async def search_orders(
         query = query.where(Order.created_at <= datetime.combine(date_to, datetime.max.time()))
 
     total = (await db.execute(
-        select(func.count()).select_from(query.subquery()))
-    ).scalar() or 0
+        select(func.count()).select_from(query.subquery())
+    )).scalar() or 0
 
     result = await db.execute(
         query.offset((page - 1) * limit).limit(limit).order_by(Order.created_at.desc())
@@ -74,7 +92,7 @@ async def search_orders(
     return result.scalars().unique().all(), total
 
 
-# ── Create ─────────────────────────────────────────────────────────────────────
+# ── Order number ───────────────────────────────────────────────────────────────
 
 async def _generate_order_number(db: AsyncSession) -> str:
     today = datetime.utcnow().strftime("%Y%m%d")
@@ -85,340 +103,47 @@ async def _generate_order_number(db: AsyncSession) -> str:
     return f"{prefix}{str(count + 1).zfill(4)}"
 
 
-async def create_bundle_order(
-    db: AsyncSession, data: BundleOrderCreate, created_by: uuid.UUID
-) -> Order:
-    if not data.items:
-        raise AppException(status_code=400, detail="Order must have at least one item")
+# ── Stock helpers ──────────────────────────────────────────────────────────────
 
-    order = Order(
-        order_number=await _generate_order_number(db),
-        tenant_id=data.tenant_id,
-        shop_id=data.shop_id,
-        created_by=created_by,
-        assigned_executive=data.assigned_executive or created_by,
-        distributor_id=data.distributor_id,
-        order_type=OrderType.bundle,
-        notes=data.notes,
-        status=OrderStatus.placed,
-        discount_percent=0,
-        subtotal=0,
-        discount_amount=0,
-        total_amount=0,
-        stock_deducted=False,
-    )
-    db.add(order)
-    await db.flush()
-
-    subtotal = 0.0
-    for item in data.items:
-        product = await db.scalar(select(Product).where(Product.id == item.product_id))
-        if not product:
-            raise AppException(status_code=404, detail=f"Product {item.product_id} not found")
-        set_type = await db.scalar(select(SetType).where(SetType.id == item.set_type_id))
-        if not set_type:
-            raise AppException(status_code=404, detail=f"SetType {item.set_type_id} not found")
-
-        unit_price = float(product.mrp)
-        total_price = unit_price * item.count
-        subtotal += total_price
-
-        db.add(OrderItem(
-            order_id=order.id,
-            product_id=item.product_id,
-            set_type_id=item.set_type_id,
-            variant_id=None,
-            count=item.count,
-            unit_price=unit_price,
-            total_price=total_price,
-        ))
-
-    order.subtotal = subtotal
-    order.total_amount = subtotal
-    await db.flush()
-    return await get_order_by_id(db, order.id)
+async def _get_available_individual(db: AsyncSession, variant_id: uuid.UUID) -> int:
+    stock = await db.scalar(select(Stock).where(Stock.variant_id == variant_id))
+    return int(stock.individual_count) if stock else 0
 
 
-async def create_individual_order(
-    db: AsyncSession, data: IndividualOrderCreate, created_by: uuid.UUID
-) -> Order:
-    if not data.items:
-        raise AppException(status_code=400, detail="Order must have at least one item")
+async def _get_available_bundle(
+    db: AsyncSession, product_id: uuid.UUID, set_type_id: uuid.UUID
+) -> int:
+    size_items = (await db.execute(
+        select(SetTypeItem).where(SetTypeItem.set_type_id == set_type_id)
+    )).scalars().all()
 
-    order = Order(
-        order_number=await _generate_order_number(db),
-        tenant_id=data.tenant_id,
-        shop_id=data.shop_id,
-        created_by=created_by,
-        assigned_executive=data.assigned_executive or created_by,
-        distributor_id=data.distributor_id,
-        order_type=OrderType.individual,
-        notes=data.notes,
-        status=OrderStatus.placed,
-        discount_percent=0,
-        subtotal=0,
-        discount_amount=0,
-        total_amount=0,
-        stock_deducted=False,
-    )
-    db.add(order)
-    await db.flush()
+    if not size_items:
+        return 0
 
-    subtotal = 0.0
-    for item in data.items:
-        product = await db.scalar(select(Product).where(Product.id == item.product_id))
-        if not product:
-            raise AppException(status_code=404, detail=f"Product {item.product_id} not found")
+    min_available = None
+    for si in size_items:
         variant = await db.scalar(
             select(ProductVariant).where(
-                ProductVariant.id == item.variant_id,
-                ProductVariant.product_id == item.product_id,
+                ProductVariant.product_id == product_id,
+                ProductVariant.size == si.size,
             )
         )
         if not variant:
-            raise AppException(
-                status_code=404,
-                detail=f"Variant {item.variant_id} not found for product {item.product_id}"
-            )
-
-        unit_price = float(product.mrp)
-        total_price = unit_price * item.count
-        subtotal += total_price
-
-        db.add(OrderItem(
-            order_id=order.id,
-            product_id=item.product_id,
-            variant_id=item.variant_id,
-            set_type_id=None,
-            count=item.count,
-            unit_price=unit_price,
-            total_price=total_price,
-        ))
-
-    order.subtotal = subtotal
-    order.total_amount = subtotal
-    await db.flush()
-    return await get_order_by_id(db, order.id)
-
-
-# ── Status transitions ─────────────────────────────────────────────────────────
-
-async def verify_order(db: AsyncSession, order: Order) -> Order:
-    order.status = OrderStatus.verified
-    await db.flush()
-    return await get_order_by_id(db, order.id)
-
-
-async def assign_distributor(
-    db: AsyncSession, order: Order, distributor_id: uuid.UUID
-) -> Order:
-    order.distributor_id = distributor_id
-    order.status = OrderStatus.assigned
-    await db.flush()
-    return await get_order_by_id(db, order.id)
-
-
-async def approve_order(db: AsyncSession, order: Order) -> Order:
-    order.status = OrderStatus.approved
-    await db.flush()
-    return await get_order_by_id(db, order.id)
-
-
-async def hold_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
-    order.status = OrderStatus.on_hold
-    if notes:
-        order.notes = notes
-    await db.flush()
-    return await get_order_by_id(db, order.id)
-
-
-async def reject_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
-    order.status = OrderStatus.rejected
-    if notes:
-        order.notes = notes
-    await db.flush()
-    return await get_order_by_id(db, order.id)
-
-
-async def bill_order(db: AsyncSession, order: Order) -> Order:
-    order.status = OrderStatus.billed
-    await db.flush()
-    return await get_order_by_id(db, order.id)
-
-
-async def move_to_counting(db: AsyncSession, order: Order) -> Order:
-    order.status = OrderStatus.counting
-    await db.flush()
-    return await get_order_by_id(db, order.id)
-
-
-async def move_to_packing(db: AsyncSession, order: Order) -> Order:
-    order.status = OrderStatus.packing
-    await db.flush()
-    return await get_order_by_id(db, order.id)
-
-
-async def dispatch_order(
-    db: AsyncSession,
-    order: Order,
-    delivery_partner: str,
-    tracking_number: Optional[str],
-    delivery_notes: Optional[str],
-) -> Order:
-    order.status = OrderStatus.dispatched
-    order.delivery_partner = delivery_partner
-    order.tracking_number = tracking_number
-    order.delivery_notes = delivery_notes
-    await db.flush()
-    return await get_order_by_id(db, order.id)
-
-
-async def deliver_order(db: AsyncSession, order: Order) -> Order:
-    order.status = OrderStatus.delivered
-    await db.flush()
-    return await get_order_by_id(db, order.id)
-
-
-async def return_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
-    order.status = OrderStatus.returned
-    if notes:
-        order.notes = notes
-    await db.flush()
-    return await get_order_by_id(db, order.id)
-
-
-async def apply_discount(
-    db: AsyncSession, order: Order, discount_percent: float
-) -> Order:
-    order.discount_percent = discount_percent
-    order.discount_amount = round(float(order.subtotal) * discount_percent / 100, 2)
-    order.total_amount = round(float(order.subtotal) - order.discount_amount, 2)
-    await db.flush()
-    return await get_order_by_id(db, order.id)
-
-
-async def soft_delete_order(db: AsyncSession, order: Order) -> None:
-    order.is_deleted = True
-    await db.flush()
-
-
-# ── Estimate ───────────────────────────────────────────────────────────────────
-
-async def estimate_order(db: AsyncSession, order: Order) -> Order:
-    result = await db.execute(
-        select(Order).where(Order.id == order.id).options(selectinload(Order.items))
-    )
-    full_order = result.scalar_one()
-    item_fulfillments = []
-
-    for item in full_order.items:
-        if full_order.order_type == OrderType.individual:
-            stock = await db.scalar(select(Stock).where(Stock.variant_id == item.variant_id))
-            available = stock.individual_count if stock else 0
-            fulfill = min(available, item.count)
-            item_fulfillments.append({
-                "item": item, "fulfill": fulfill, "partial": item.count - fulfill
-            })
-
-        elif full_order.order_type == OrderType.bundle:
-            size_items = (await db.execute(
-                select(SetTypeItem).where(SetTypeItem.set_type_id == item.set_type_id)
-            )).scalars().all()
-
-            min_available = None
-            for si in size_items:
-                variant = await db.scalar(
-                    select(ProductVariant).where(
-                        ProductVariant.product_id == item.product_id,
-                        ProductVariant.size == si.size,
-                    )
-                )
-                if not variant:
-                    min_available = 0
-                    break
-
-                stock = await db.scalar(
-                    select(Stock).where(Stock.variant_id == variant.id)
-                    .options(selectinload(Stock.bundle_stocks))
-                )
-                bundle_stock = next(
-                    (bs for bs in stock.bundle_stocks if bs.set_type_id == item.set_type_id), None
-                ) if stock else None
-
-                available_bundles = (
-                    bundle_stock.bundle_count // si.quantity
-                ) if bundle_stock and si.quantity > 0 else 0
-
-                if min_available is None or available_bundles < min_available:
-                    min_available = available_bundles
-
-            available = min_available or 0
-            fulfill = min(available, item.count)
-            item_fulfillments.append({
-                "item": item, "fulfill": fulfill, "partial": item.count - fulfill
-            })
-
-    has_partial = any(f["partial"] > 0 for f in item_fulfillments)
-    has_fulfilled = any(f["fulfill"] > 0 for f in item_fulfillments)
-
-    subtotal = 0.0
-    for f in item_fulfillments:
-        item = f["item"]
-        if f["fulfill"] == 0:
-            await db.delete(item)
-        else:
-            item.count = f["fulfill"]
-            item.total_price = float(item.unit_price) * f["fulfill"]
-            subtotal += item.total_price
-            await _deduct_stock_for_item(db, item, full_order.order_type, f["fulfill"])
-
-    full_order.subtotal = subtotal
-    full_order.discount_amount = round(subtotal * float(full_order.discount_percent) / 100, 2)
-    full_order.total_amount = round(subtotal - full_order.discount_amount, 2)
-    full_order.stock_deducted = has_fulfilled
-    full_order.status = OrderStatus.estimated if has_fulfilled else OrderStatus.partial
-
-    if has_partial:
-        partial_order = Order(
-            order_number=await _generate_order_number(db),
-            tenant_id=full_order.tenant_id,
-            shop_id=full_order.shop_id,
-            created_by=full_order.created_by,
-            assigned_executive=full_order.assigned_executive,
-            distributor_id=full_order.distributor_id,
-            parent_order_id=full_order.id,
-            order_type=full_order.order_type,
-            status=OrderStatus.approved,
-            discount_percent=0,
-            subtotal=0, discount_amount=0, total_amount=0,
-            stock_deducted=False,
-            notes=f"Partial order from {full_order.order_number}",
+            return 0
+        stock = await db.scalar(
+            select(Stock).where(Stock.variant_id == variant.id)
+            .options(selectinload(Stock.bundle_stocks))
         )
-        db.add(partial_order)
-        await db.flush()
+        bundle_stock = next(
+            (bs for bs in stock.bundle_stocks if bs.set_type_id == set_type_id), None
+        ) if stock else None
+        available = (
+            bundle_stock.bundle_count // si.quantity
+        ) if bundle_stock and si.quantity > 0 else 0
+        if min_available is None or available < min_available:
+            min_available = available
 
-        partial_subtotal = 0.0
-        for f in item_fulfillments:
-            if f["partial"] > 0:
-                item = f["item"]
-                total_price = float(item.unit_price) * f["partial"]
-                partial_subtotal += total_price
-                db.add(OrderItem(
-                    order_id=partial_order.id,
-                    product_id=item.product_id,
-                    variant_id=item.variant_id,
-                    set_type_id=item.set_type_id,
-                    count=f["partial"],
-                    unit_price=item.unit_price,
-                    total_price=total_price,
-                ))
-
-        partial_order.subtotal = partial_subtotal
-        partial_order.total_amount = partial_subtotal
-        await db.flush()
-
-    await db.flush()
-    return await get_order_by_id(db, full_order.id)
+    return min_available or 0
 
 
 async def _deduct_stock_for_item(
@@ -433,7 +158,6 @@ async def _deduct_stock_for_item(
         size_items = (await db.execute(
             select(SetTypeItem).where(SetTypeItem.set_type_id == item.set_type_id)
         )).scalars().all()
-
         for si in size_items:
             variant = await db.scalar(
                 select(ProductVariant).where(
@@ -458,17 +182,691 @@ async def _deduct_stock_for_item(
     await db.flush()
 
 
+async def _restore_stock_for_item(
+    db: AsyncSession, item: OrderItem, order_type: OrderType, count: int
+) -> None:
+    if order_type == OrderType.individual:
+        stock = await db.scalar(select(Stock).where(Stock.variant_id == item.variant_id))
+        if stock:
+            stock.individual_count += count
+
+    elif order_type == OrderType.bundle:
+        size_items = (await db.execute(
+            select(SetTypeItem).where(SetTypeItem.set_type_id == item.set_type_id)
+        )).scalars().all()
+        for si in size_items:
+            variant = await db.scalar(
+                select(ProductVariant).where(
+                    ProductVariant.product_id == item.product_id,
+                    ProductVariant.size == si.size,
+                )
+            )
+            if not variant:
+                continue
+            stock = await db.scalar(
+                select(Stock).where(Stock.variant_id == variant.id)
+                .options(selectinload(Stock.bundle_stocks))
+            )
+            if not stock:
+                continue
+            bundle_stock = next(
+                (bs for bs in stock.bundle_stocks if bs.set_type_id == item.set_type_id), None
+            )
+            if bundle_stock:
+                bundle_stock.bundle_count += count * si.quantity
+
+    await db.flush()
+
+
+async def _restore_all_stock(db: AsyncSession, order: Order) -> None:
+    for item in order.items:
+        await _restore_stock_for_item(db, item, order.order_type, item.count)
+
+
+# ── Totals ─────────────────────────────────────────────────────────────────────
+
+def _recalculate_totals(order: Order) -> None:
+    subtotal = sum(float(i.total_price) for i in order.items)
+    percent_discount = round(subtotal * float(order.discount_percent) / 100, 2)
+    flat_discount = float(order.discount_flat)
+    discount_amount = round(min(percent_discount + flat_discount, subtotal), 2)
+    order.subtotal = subtotal
+    order.discount_amount = discount_amount
+    order.total_amount = round(subtotal - discount_amount, 2)
+
+
+# ── Create ─────────────────────────────────────────────────────────────────────
+
+async def create_bundle_order(
+    db: AsyncSession, data: BundleOrderCreate, created_by: uuid.UUID
+) -> Order:
+    if not data.items:
+        raise AppException(status_code=400, detail="Order must have at least one item")
+
+    order = Order(
+        order_number=await _generate_order_number(db),
+        tenant_id=data.tenant_id,
+        shop_id=data.shop_id,
+        created_by=created_by,
+        assigned_executive=data.assigned_executive or created_by,
+        distributor_id=data.distributor_id,
+        order_type=OrderType.bundle,
+        notes=data.notes,
+        status=OrderStatus.placed,
+        discount_percent=0,
+        discount_flat=0,
+        subtotal=0,
+        discount_amount=0,
+        total_amount=0,
+        stock_deducted=False,
+    )
+    db.add(order)
+    await db.flush()
+
+    order_items = []
+    for item in data.items:
+        product = await db.scalar(select(Product).where(Product.id == item.product_id))
+        if not product:
+            raise AppException(status_code=404, detail=f"Product {item.product_id} not found")
+        set_type = await db.scalar(select(SetType).where(SetType.id == item.set_type_id))
+        if not set_type:
+            raise AppException(status_code=404, detail=f"SetType {item.set_type_id} not found")
+
+        oi = OrderItem(
+            order_id=order.id,
+            product_id=item.product_id,
+            set_type_id=item.set_type_id,
+            variant_id=None,
+            count=item.count,
+            unit_price=float(product.mrp),
+            total_price=float(product.mrp) * item.count,
+        )
+        db.add(oi)
+        order_items.append(oi)
+
+    await db.flush()
+    _recalculate_totals(order)
+
+    for oi in order_items:
+        await _deduct_stock_for_item(db, oi, OrderType.bundle, oi.count)
+
+    order.stock_deducted = True
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def create_individual_order(
+    db: AsyncSession, data: IndividualOrderCreate, created_by: uuid.UUID
+) -> Order:
+    if not data.items:
+        raise AppException(status_code=400, detail="Order must have at least one item")
+
+    order = Order(
+        order_number=await _generate_order_number(db),
+        tenant_id=data.tenant_id,
+        shop_id=data.shop_id,
+        created_by=created_by,
+        assigned_executive=data.assigned_executive or created_by,
+        distributor_id=data.distributor_id,
+        order_type=OrderType.individual,
+        notes=data.notes,
+        status=OrderStatus.placed,
+        discount_percent=0,
+        discount_flat=0,
+        subtotal=0,
+        discount_amount=0,
+        total_amount=0,
+        stock_deducted=False,
+    )
+    db.add(order)
+    await db.flush()
+
+    order_items = []
+    for item in data.items:
+        product = await db.scalar(select(Product).where(Product.id == item.product_id))
+        if not product:
+            raise AppException(status_code=404, detail=f"Product {item.product_id} not found")
+        variant = await db.scalar(
+            select(ProductVariant).where(
+                ProductVariant.id == item.variant_id,
+                ProductVariant.product_id == item.product_id,
+            )
+        )
+        if not variant:
+            raise AppException(
+                status_code=404,
+                detail=f"Variant {item.variant_id} not found for product {item.product_id}"
+            )
+
+        oi = OrderItem(
+            order_id=order.id,
+            product_id=item.product_id,
+            variant_id=item.variant_id,
+            set_type_id=None,
+            count=item.count,
+            unit_price=float(product.mrp),
+            total_price=float(product.mrp) * item.count,
+        )
+        db.add(oi)
+        order_items.append(oi)
+
+    await db.flush()
+    _recalculate_totals(order)
+
+    for oi in order_items:
+        await _deduct_stock_for_item(db, oi, OrderType.individual, oi.count)
+
+    order.stock_deducted = True
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+# ── Estimate split preview (read-only) ────────────────────────────────────────
+
+async def get_estimate_split_preview(db: AsyncSession, order: Order) -> dict:
+    shortfall_items = []
+    fully_available_items = []
+
+    for item in order.items:
+        if order.order_type == OrderType.individual:
+            available_now = await _get_available_individual(db, item.variant_id)
+        else:
+            available_now = await _get_available_bundle(db, item.product_id, item.set_type_id)
+
+        # stock was deducted at placement so available_now reflects post-deduction
+        # adding item.count back gives us what was available at placement time
+        available_at_placement = available_now + item.count
+        coverable = min(item.count, max(0, available_at_placement))
+        shortfall = item.count - coverable
+
+        item_data = {
+            "orderItemId": str(item.id),
+            "productId": str(item.product_id),
+            "productName": item.product.name if item.product else None,
+            "variantId": str(item.variant_id) if item.variant_id else None,
+            "variantSize": item.variant.size if item.variant else None,
+            "variantColor": item.variant.color if item.variant else None,
+            "setTypeId": str(item.set_type_id) if item.set_type_id else None,
+            "setTypeName": item.set_type.name if item.set_type else None,
+            "requested": item.count,
+            "available": coverable,
+            "shortfall": shortfall,
+        }
+
+        if shortfall > 0:
+            shortfall_items.append(item_data)
+        else:
+            fully_available_items.append(serialize_order_item(item))
+
+    return {
+        "hasShortfall": len(shortfall_items) > 0,
+        "shortfallItems": shortfall_items,
+        "fullyAvailableItems": fully_available_items,
+    }
+
+
+# ── Estimate ───────────────────────────────────────────────────────────────────
+
+async def estimate_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
+    _recalculate_totals(order)
+    order.status = OrderStatus.estimated
+    if notes:
+        order.notes = notes
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+# ── Split ──────────────────────────────────────────────────────────────────────
+
+async def split_order(
+    db: AsyncSession,
+    order: Order,
+    split_input: SplitOrderInput,
+    created_by: uuid.UUID,
+) -> Order:
+    parent_items_by_id = {item.id: item for item in order.items}
+    validated = []
+
+    for si in split_input.items:
+        parent_item = parent_items_by_id.get(si.order_item_id)
+        if not parent_item:
+            raise AppException(
+                status_code=404,
+                detail=f"OrderItem {si.order_item_id} not found in order {order.order_number}"
+            )
+        if si.count <= 0:
+            raise AppException(status_code=400, detail="Split count must be greater than 0")
+        if si.count > parent_item.count:
+            raise AppException(
+                status_code=400,
+                detail=f"Split count {si.count} exceeds item count {parent_item.count}"
+            )
+        validated.append({"parent_item": parent_item, "split_count": si.count})
+
+    new_order = Order(
+        order_number=await _generate_order_number(db),
+        tenant_id=order.tenant_id,
+        shop_id=order.shop_id,
+        created_by=created_by,
+        assigned_executive=order.assigned_executive,
+        distributor_id=order.distributor_id,
+        parent_order_id=order.id if split_input.create_as == "child" else None,
+        order_type=order.order_type,
+        status=OrderStatus.placed,
+        discount_percent=0,
+        discount_flat=0,
+        subtotal=0,
+        discount_amount=0,
+        total_amount=0,
+        stock_deducted=True,
+        notes=split_input.notes or f"Split from {order.order_number}",
+    )
+    db.add(new_order)
+    await db.flush()
+
+    for v in validated:
+        parent_item = v["parent_item"]
+        split_count = v["split_count"]
+        remaining = parent_item.count - split_count
+
+        db.add(OrderItem(
+            order_id=new_order.id,
+            product_id=parent_item.product_id,
+            variant_id=parent_item.variant_id,
+            set_type_id=parent_item.set_type_id,
+            count=split_count,
+            unit_price=parent_item.unit_price,
+            total_price=float(parent_item.unit_price) * split_count,
+        ))
+
+        if remaining == 0:
+            await db.delete(parent_item)
+        else:
+            parent_item.count = remaining
+            parent_item.total_price = float(parent_item.unit_price) * remaining
+
+    await db.flush()
+
+    # recalculate parent totals
+    parent_result = await db.execute(
+        select(Order).where(Order.id == order.id).options(selectinload(Order.items))
+    )
+    refreshed_parent = parent_result.scalar_one()
+    _recalculate_totals(refreshed_parent)
+
+    # recalculate new order totals
+    new_result = await db.execute(
+        select(Order).where(Order.id == new_order.id).options(selectinload(Order.items))
+    )
+    refreshed_new = new_result.scalar_one()
+    _recalculate_totals(refreshed_new)
+
+    await db.flush()
+    return await get_order_by_id(db, new_order.id)
+
+
+# ── Status transitions ─────────────────────────────────────────────────────────
+
+async def verify_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
+    order.status = OrderStatus.verified
+    if notes:
+        order.notes = notes
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def assign_distributor(
+    db: AsyncSession, order: Order, distributor_id: uuid.UUID, notes: Optional[str]
+) -> Order:
+    order.distributor_id = distributor_id
+    order.status = OrderStatus.assigned
+    if notes:
+        order.notes = notes
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def approve_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
+    order.status = OrderStatus.approved
+    if notes:
+        order.notes = notes
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def hold_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
+    order.status = OrderStatus.on_hold
+    if notes:
+        order.notes = notes
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def unhold_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
+    order.status = OrderStatus.assigned
+    if notes:
+        order.notes = notes
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def reject_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
+    if order.stock_deducted:
+        await _restore_all_stock(db, order)
+        order.stock_deducted = False
+    order.status = OrderStatus.rejected
+    if notes:
+        order.notes = notes
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def cancel_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
+    if order.status not in CANCELLABLE_STATUSES:
+        raise AppException(
+            status_code=400,
+            detail=f"Order in status '{order.status}' cannot be cancelled"
+        )
+    if order.stock_deducted:
+        await _restore_all_stock(db, order)
+        order.stock_deducted = False
+    order.status = OrderStatus.cancelled
+    if notes:
+        order.notes = notes
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def bill_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
+    order.status = OrderStatus.billed
+    if notes:
+        order.notes = notes
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def apply_discount(
+    db: AsyncSession,
+    order: Order,
+    discount_percent: Optional[float],
+    discount_flat: Optional[float],
+    notes: Optional[str],
+) -> Order:
+    if discount_percent is not None:
+        if not (0 <= discount_percent <= 100):
+            raise AppException(status_code=400, detail="discount_percent must be between 0 and 100")
+        order.discount_percent = discount_percent
+    if discount_flat is not None:
+        if discount_flat < 0:
+            raise AppException(status_code=400, detail="discount_flat must be >= 0")
+        order.discount_flat = discount_flat
+    if notes:
+        order.notes = notes
+    _recalculate_totals(order)
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def move_to_counting(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
+    order.status = OrderStatus.counting
+    if notes:
+        order.notes = notes
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def move_to_packing(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
+    order.status = OrderStatus.packing
+    if notes:
+        order.notes = notes
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def dispatch_order(
+    db: AsyncSession, order: Order,
+    delivery_partner: str,
+    tracking_number: Optional[str],
+    delivery_notes: Optional[str],
+    notes: Optional[str],
+) -> Order:
+    order.status = OrderStatus.dispatched
+    order.delivery_partner = delivery_partner
+    order.tracking_number = tracking_number
+    order.delivery_notes = delivery_notes
+    if notes:
+        order.notes = notes
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def deliver_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
+    order.status = OrderStatus.delivered
+    if notes:
+        order.notes = notes
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def soft_delete_order(db: AsyncSession, order: Order) -> None:
+    order.is_deleted = True
+    await db.flush()
+
+
+# ── Returns ────────────────────────────────────────────────────────────────────
+
+async def process_return(
+    db: AsyncSession,
+    order: Order,
+    return_input: CreateOrderReturnInput,
+    processed_by: uuid.UUID,
+) -> List[OrderReturn]:
+    order_items_by_id = {item.id: item for item in order.items}
+    created_returns = []
+
+    for ri in return_input.items:
+        order_item = order_items_by_id.get(ri.order_item_id)
+        if not order_item:
+            raise AppException(
+                status_code=404,
+                detail=f"OrderItem {ri.order_item_id} not found in order"
+            )
+        if ri.count <= 0:
+            raise AppException(status_code=400, detail="Return count must be greater than 0")
+
+        # check cumulative returned count for this item
+        already_returned_result = await db.execute(
+            select(func.coalesce(func.sum(OrderReturn.count), 0)).where(
+                OrderReturn.order_item_id == ri.order_item_id,
+                OrderReturn.order_id == order.id,
+            )
+        )
+        total_already_returned = already_returned_result.scalar() or 0
+
+        if total_already_returned + ri.count > order_item.count:
+            raise AppException(
+                status_code=400,
+                detail=f"Total returned ({total_already_returned + ri.count}) exceeds "
+                       f"original count ({order_item.count}) for item {ri.order_item_id}"
+            )
+
+        # restore stock based on return_type
+        await _restore_stock_by_return_type(
+            db=db,
+            order_item=order_item,
+            return_type=ri.return_type,
+            count=ri.count,
+        )
+
+        order_return = OrderReturn(
+            order_id=order.id,
+            order_item_id=order_item.id,
+            product_id=order_item.product_id,
+            variant_id=order_item.variant_id,
+            set_type_id=order_item.set_type_id,
+            return_type=ri.return_type,
+            count=ri.count,
+            processed_by=processed_by,
+            notes=ri.notes or return_input.notes,
+        )
+        db.add(order_return)
+        created_returns.append(order_return)
+
+    await db.flush()
+    await _update_order_return_status(db, order)
+    await db.flush()
+
+    return created_returns
+
+
+async def _restore_stock_by_return_type(
+    db: AsyncSession,
+    order_item: OrderItem,
+    return_type: ReturnType,
+    count: int,
+) -> None:
+    if return_type == ReturnType.individual:
+        if order_item.variant_id:
+            # individual order item — direct variant stock restore
+            stock = await db.scalar(
+                select(Stock).where(Stock.variant_id == order_item.variant_id)
+            )
+            if stock:
+                stock.individual_count += count
+        else:
+            # bundle order item returned as individual pieces —
+            # distribute pieces per size across all variants in the set
+            size_items = (await db.execute(
+                select(SetTypeItem).where(SetTypeItem.set_type_id == order_item.set_type_id)
+            )).scalars().all()
+            for si in size_items:
+                variant = await db.scalar(
+                    select(ProductVariant).where(
+                        ProductVariant.product_id == order_item.product_id,
+                        ProductVariant.size == si.size,
+                    )
+                )
+                if not variant:
+                    continue
+                stock = await db.scalar(
+                    select(Stock).where(Stock.variant_id == variant.id)
+                )
+                if stock:
+                    stock.individual_count += count * si.quantity
+
+    elif return_type == ReturnType.bundle:
+        # restore as full bundles back into bundle stock
+        size_items = (await db.execute(
+            select(SetTypeItem).where(SetTypeItem.set_type_id == order_item.set_type_id)
+        )).scalars().all()
+        for si in size_items:
+            variant = await db.scalar(
+                select(ProductVariant).where(
+                    ProductVariant.product_id == order_item.product_id,
+                    ProductVariant.size == si.size,
+                )
+            )
+            if not variant:
+                continue
+            stock = await db.scalar(
+                select(Stock).where(Stock.variant_id == variant.id)
+                .options(selectinload(Stock.bundle_stocks))
+            )
+            if not stock:
+                continue
+            bundle_stock = next(
+                (bs for bs in stock.bundle_stocks
+                 if bs.set_type_id == order_item.set_type_id), None
+            )
+            if bundle_stock:
+                bundle_stock.bundle_count += count * si.quantity
+
+    await db.flush()
+
+
+async def _update_order_return_status(db: AsyncSession, order: Order) -> None:
+    total_ordered = sum(item.count for item in order.items)
+
+    total_returned_result = await db.execute(
+        select(func.coalesce(func.sum(OrderReturn.count), 0)).where(
+            OrderReturn.order_id == order.id
+        )
+    )
+    total_returned = total_returned_result.scalar() or 0
+
+    if total_returned <= 0:
+        return
+    elif total_returned >= total_ordered:
+        order.status = OrderStatus.returned
+        order.stock_deducted = False
+    else:
+        order.status = OrderStatus.partially_returned
+
+
+async def get_returns_for_order(
+    db: AsyncSession, order_id: uuid.UUID
+) -> List[OrderReturn]:
+    result = await db.execute(
+        select(OrderReturn)
+        .where(OrderReturn.order_id == order_id)
+        .options(
+            selectinload(OrderReturn.product),
+            selectinload(OrderReturn.variant),
+            selectinload(OrderReturn.set_type),
+            selectinload(OrderReturn.processor),
+        )
+        .order_by(OrderReturn.created_at.desc())
+    )
+    return result.scalars().all()
+
+
 # ── Serialization ──────────────────────────────────────────────────────────────
+
+def _user_full_name(user) -> Optional[str]:
+    if not user:
+        return None
+    return f"{user.first_name} {user.last_name}".strip() if user.last_name else user.first_name
+
 
 def serialize_order_item(item: OrderItem) -> dict:
     return {
         "id": str(item.id),
         "productId": str(item.product_id),
+        "productName": item.product.name if item.product else None,
+        "productMrp": float(item.product.mrp) if item.product else None,
+        "productDpPrice": float(item.product.dp_price) if item.product else None,
         "variantId": str(item.variant_id) if item.variant_id else None,
+        "variantSku": item.variant.sku if item.variant else None,
+        "variantSize": item.variant.size if item.variant else None,
+        "variantColor": item.variant.color if item.variant else None,
+        "variantPattern": item.variant.pattern if item.variant else None,
+        "variantThumbnailUrl": item.variant.thumbnail_url if item.variant else None,
         "setTypeId": str(item.set_type_id) if item.set_type_id else None,
+        "setTypeName": item.set_type.name if item.set_type else None,
         "count": item.count,
         "unitPrice": float(item.unit_price),
         "totalPrice": float(item.total_price),
+    }
+
+
+def serialize_order_return(r: OrderReturn) -> dict:
+    return {
+        "id": str(r.id),
+        "orderId": str(r.order_id),
+        "orderItemId": str(r.order_item_id),
+        "productId": str(r.product_id),
+        "productName": r.product.name if r.product else None,
+        "variantId": str(r.variant_id) if r.variant_id else None,
+        "variantSize": r.variant.size if r.variant else None,
+        "variantColor": r.variant.color if r.variant else None,
+        "setTypeId": str(r.set_type_id) if r.set_type_id else None,
+        "setTypeName": r.set_type.name if r.set_type else None,
+        "returnType": r.return_type,
+        "count": r.count,
+        "processedBy": str(r.processed_by),
+        "processedByName": _user_full_name(r.processor),
+        "notes": r.notes,
+        "createdAt": r.created_at.isoformat(),
     }
 
 
@@ -477,14 +875,25 @@ def serialize_order(order: Order) -> dict:
         "id": str(order.id),
         "orderNumber": order.order_number,
         "tenantId": str(order.tenant_id),
+        "tenantName": order.tenant.name if order.tenant else None,
         "shopId": str(order.shop_id),
+        "shopName": order.shop.name if order.shop else None,
+        "shopContactPerson": order.shop.contact_person if order.shop else None,
+        "shopContactNumber": order.shop.contact_number if order.shop else None,
+        "shopPhone": order.shop.phone if order.shop else None,
+        "shopAddress": order.shop.address if order.shop else None,
         "createdBy": str(order.created_by),
+        "createdByName": _user_full_name(order.creator),
         "assignedExecutive": str(order.assigned_executive) if order.assigned_executive else None,
+        "assignedExecutiveName": _user_full_name(order.executive),
         "distributorId": str(order.distributor_id) if order.distributor_id else None,
+        "distributorName": _user_full_name(order.distributor),
+        "distributorPhone": order.distributor.phone if order.distributor else None,
         "parentOrderId": str(order.parent_order_id) if order.parent_order_id else None,
         "orderType": order.order_type,
         "status": order.status,
         "discountPercent": float(order.discount_percent),
+        "discountFlat": float(order.discount_flat),
         "subtotal": float(order.subtotal),
         "discountAmount": float(order.discount_amount),
         "totalAmount": float(order.total_amount),
@@ -494,21 +903,23 @@ def serialize_order(order: Order) -> dict:
         "trackingNumber": order.tracking_number,
         "deliveryNotes": order.delivery_notes,
         "items": [serialize_order_item(i) for i in order.items],
-        "partialOrders": [
+        "childOrders": [
             {
-                "id": str(po.id),
-                "orderNumber": po.order_number,
-                "status": po.status,
-                "orderType": po.order_type,
-                "subtotal": float(po.subtotal),
-                "totalAmount": float(po.total_amount),
-                "notes": po.notes,
-                "items": [serialize_order_item(i) for i in po.items],
-                "createdAt": po.created_at.isoformat(),
-                "updatedAt": po.updated_at.isoformat(),
+                "id": str(co.id),
+                "orderNumber": co.order_number,
+                "status": co.status,
+                "orderType": co.order_type,
+                "subtotal": float(co.subtotal),
+                "totalAmount": float(co.total_amount),
+                "notes": co.notes,
+                "isChild": co.parent_order_id is not None,
+                "items": [serialize_order_item(i) for i in co.items],
+                "createdAt": co.created_at.isoformat(),
+                "updatedAt": co.updated_at.isoformat(),
             }
-            for po in order.partial_orders
+            for co in order.child_orders
         ],
+        "orderReturns": [serialize_order_return(r) for r in order.order_returns],
         "createdAt": order.created_at.isoformat(),
         "updatedAt": order.updated_at.isoformat(),
     }
