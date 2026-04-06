@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.order import (
-    Order, OrderItem, OrderReturn, OrderStatus, OrderType, ReturnType,
+    Order, OrderItem, OrderReturn, OrderStatus, OrderType, ReturnType, PriceType,
     CANCELLABLE_STATUSES, STOCK_RESTORE_STATUSES,
 )
 from app.models.product import Product, ProductVariant
@@ -16,9 +16,10 @@ from app.schemas.order import BundleOrderCreate, IndividualOrderCreate, SplitOrd
 from app.core.exceptions import AppException
 
 
-# ── Query ──────────────────────────────────────────────────────────────────────
+# ── Queries ────────────────────────────────────────────────────────────────────
 
-def _order_query():
+def _order_list_query():
+    """Lightweight — for list/search endpoints."""
     return (
         select(Order)
         .where(Order.is_deleted == False)  # noqa
@@ -26,9 +27,29 @@ def _order_query():
             selectinload(Order.items).selectinload(OrderItem.product),
             selectinload(Order.items).selectinload(OrderItem.variant),
             selectinload(Order.items).selectinload(OrderItem.set_type),
+            selectinload(Order.shop),
+            selectinload(Order.creator),
+            selectinload(Order.executive),
+            selectinload(Order.distributor),
+            selectinload(Order.tenant),
+        )
+    )
+
+
+def _order_detail_query():
+    """Full load — for single order fetch only."""
+    return (
+        select(Order)
+        .where(Order.is_deleted == False)  # noqa
+        .options(
+            selectinload(Order.items).selectinload(OrderItem.product),
+            selectinload(Order.items).selectinload(OrderItem.variant),
+            selectinload(Order.items).selectinload(OrderItem.set_type),
+            selectinload(Order.items).selectinload(OrderItem.item_returns),
             selectinload(Order.child_orders).selectinload(Order.items).selectinload(OrderItem.product),
             selectinload(Order.child_orders).selectinload(Order.items).selectinload(OrderItem.variant),
             selectinload(Order.child_orders).selectinload(Order.items).selectinload(OrderItem.set_type),
+            selectinload(Order.child_orders).selectinload(Order.items).selectinload(OrderItem.item_returns),
             selectinload(Order.order_returns).selectinload(OrderReturn.product),
             selectinload(Order.order_returns).selectinload(OrderReturn.variant),
             selectinload(Order.order_returns).selectinload(OrderReturn.set_type),
@@ -42,8 +63,10 @@ def _order_query():
     )
 
 
+# ── Fetch ──────────────────────────────────────────────────────────────────────
+
 async def get_order_by_id(db: AsyncSession, order_id: uuid.UUID) -> Optional[Order]:
-    result = await db.execute(_order_query().where(Order.id == order_id))
+    result = await db.execute(_order_detail_query().where(Order.id == order_id))
     return result.scalar_one_or_none()
 
 
@@ -61,33 +84,41 @@ async def search_orders(
     page: int = 1,
     limit: int = 20,
 ) -> Tuple[List[Order], int]:
-    query = _order_query()
+
+    # build filters separately for fast count
+    filters = [Order.is_deleted == False]  # noqa
 
     if parent_only:
-        query = query.where(Order.parent_order_id == None)  # noqa
+        filters.append(Order.parent_order_id == None)  # noqa
     if tenant_id:
-        query = query.where(Order.tenant_id == tenant_id)
+        filters.append(Order.tenant_id == tenant_id)
     if shop_id:
-        query = query.where(Order.shop_id == shop_id)
+        filters.append(Order.shop_id == shop_id)
     if distributor_id:
-        query = query.where(Order.distributor_id == distributor_id)
+        filters.append(Order.distributor_id == distributor_id)
     if assigned_executive:
-        query = query.where(Order.assigned_executive == assigned_executive)
+        filters.append(Order.assigned_executive == assigned_executive)
     if status:
-        query = query.where(Order.status == status)
+        filters.append(Order.status == status)
     if order_type:
-        query = query.where(Order.order_type == order_type)
+        filters.append(Order.order_type == order_type)
     if date_from:
-        query = query.where(Order.created_at >= datetime.combine(date_from, datetime.min.time()))
+        filters.append(Order.created_at >= datetime.combine(date_from, datetime.min.time()))
     if date_to:
-        query = query.where(Order.created_at <= datetime.combine(date_to, datetime.max.time()))
+        filters.append(Order.created_at <= datetime.combine(date_to, datetime.max.time()))
 
+    # fast count — direct, no joins, no subquery
     total = (await db.execute(
-        select(func.count()).select_from(query.subquery())
+        select(func.count(Order.id)).where(*filters)
     )).scalar() or 0
 
+    # data fetch — lightweight query
     result = await db.execute(
-        query.offset((page - 1) * limit).limit(limit).order_by(Order.created_at.desc())
+        _order_list_query()
+        .where(*filters)
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .order_by(Order.created_at.desc())
     )
     return result.scalars().unique().all(), total
 
@@ -101,6 +132,14 @@ async def _generate_order_number(db: AsyncSession) -> str:
         select(func.count()).where(Order.order_number.like(f"{prefix}%"))
     )).scalar() or 0
     return f"{prefix}{str(count + 1).zfill(4)}"
+
+
+# ── Price helper ───────────────────────────────────────────────────────────────
+
+def _get_unit_price(product: Product, price_type: PriceType) -> float:
+    if price_type == PriceType.dp:
+        return float(product.dp_price)
+    return float(product.mrp)
 
 
 # ── Stock helpers ──────────────────────────────────────────────────────────────
@@ -226,8 +265,6 @@ async def _restore_all_stock(db: AsyncSession, order: Order) -> None:
 # ── Totals ─────────────────────────────────────────────────────────────────────
 
 def _recalculate_totals(order: Order, items=None) -> None:
-    # use passed items list if provided, otherwise fall back to order.items
-    # (order.items is safe only when loaded via selectinload)
     source = items if items is not None else order.items
     subtotal = sum(float(i.total_price) for i in source)
     percent_discount = round(subtotal * float(order.discount_percent) / 100, 2)
@@ -254,6 +291,7 @@ async def create_bundle_order(
         assigned_executive=data.assigned_executive or created_by,
         distributor_id=data.distributor_id,
         order_type=OrderType.bundle,
+        price_type=data.price_type,
         notes=data.notes,
         status=OrderStatus.placed,
         discount_percent=0,
@@ -275,14 +313,15 @@ async def create_bundle_order(
         if not set_type:
             raise AppException(status_code=404, detail=f"SetType {item.set_type_id} not found")
 
+        unit_price = _get_unit_price(product, data.price_type)
         oi = OrderItem(
             order_id=order.id,
             product_id=item.product_id,
             set_type_id=item.set_type_id,
             variant_id=None,
             count=item.count,
-            unit_price=float(product.mrp),
-            total_price=float(product.mrp) * item.count,
+            unit_price=unit_price,
+            total_price=unit_price * item.count,
         )
         db.add(oi)
         order_items.append(oi)
@@ -312,6 +351,7 @@ async def create_individual_order(
         assigned_executive=data.assigned_executive or created_by,
         distributor_id=data.distributor_id,
         order_type=OrderType.individual,
+        price_type=data.price_type,
         notes=data.notes,
         status=OrderStatus.placed,
         discount_percent=0,
@@ -341,14 +381,15 @@ async def create_individual_order(
                 detail=f"Variant {item.variant_id} not found for product {item.product_id}"
             )
 
+        unit_price = _get_unit_price(product, data.price_type)
         oi = OrderItem(
             order_id=order.id,
             product_id=item.product_id,
             variant_id=item.variant_id,
             set_type_id=None,
             count=item.count,
-            unit_price=float(product.mrp),
-            total_price=float(product.mrp) * item.count,
+            unit_price=unit_price,
+            total_price=unit_price * item.count,
         )
         db.add(oi)
         order_items.append(oi)
@@ -376,8 +417,6 @@ async def get_estimate_split_preview(db: AsyncSession, order: Order) -> dict:
         else:
             available_now = await _get_available_bundle(db, item.product_id, item.set_type_id)
 
-        # stock was deducted at placement so available_now reflects post-deduction
-        # adding item.count back gives us what was available at placement time
         available_at_placement = available_now + item.count
         coverable = min(item.count, max(0, available_at_placement))
         shortfall = item.count - coverable
@@ -455,6 +494,7 @@ async def split_order(
         distributor_id=order.distributor_id,
         parent_order_id=order.id if split_input.create_as == "child" else None,
         order_type=order.order_type,
+        price_type=order.price_type,
         status=OrderStatus.placed,
         discount_percent=0,
         discount_flat=0,
@@ -490,14 +530,12 @@ async def split_order(
 
     await db.flush()
 
-    # recalculate parent totals
     parent_result = await db.execute(
         select(Order).where(Order.id == order.id).options(selectinload(Order.items))
     )
     refreshed_parent = parent_result.scalar_one()
     _recalculate_totals(refreshed_parent)
 
-    # recalculate new order totals
     new_result = await db.execute(
         select(Order).where(Order.id == new_order.id).options(selectinload(Order.items))
     )
@@ -677,7 +715,6 @@ async def process_return(
         if ri.count <= 0:
             raise AppException(status_code=400, detail="Return count must be greater than 0")
 
-        # check cumulative returned count for this item
         already_returned_result = await db.execute(
             select(func.coalesce(func.sum(OrderReturn.count), 0)).where(
                 OrderReturn.order_item_id == ri.order_item_id,
@@ -693,7 +730,6 @@ async def process_return(
                        f"original count ({order_item.count}) for item {ri.order_item_id}"
             )
 
-        # restore stock based on return_type
         await _restore_stock_by_return_type(
             db=db,
             order_item=order_item,
@@ -730,15 +766,12 @@ async def _restore_stock_by_return_type(
 ) -> None:
     if return_type == ReturnType.individual:
         if order_item.variant_id:
-            # individual order item — direct variant stock restore
             stock = await db.scalar(
                 select(Stock).where(Stock.variant_id == order_item.variant_id)
             )
             if stock:
                 stock.individual_count += count
         else:
-            # bundle order item returned as individual pieces —
-            # distribute pieces per size across all variants in the set
             size_items = (await db.execute(
                 select(SetTypeItem).where(SetTypeItem.set_type_id == order_item.set_type_id)
             )).scalars().all()
@@ -758,7 +791,6 @@ async def _restore_stock_by_return_type(
                     stock.individual_count += count * si.quantity
 
     elif return_type == ReturnType.bundle:
-        # restore as full bundles back into bundle stock
         size_items = (await db.execute(
             select(SetTypeItem).where(SetTypeItem.set_type_id == order_item.set_type_id)
         )).scalars().all()
@@ -832,6 +864,7 @@ def _user_full_name(user) -> Optional[str]:
 
 
 def serialize_order_item(item: OrderItem) -> dict:
+    total_returned = sum(r.count for r in item.item_returns) if hasattr(item, 'item_returns') and item.item_returns else 0
     return {
         "id": str(item.id),
         "productId": str(item.product_id),
@@ -847,6 +880,8 @@ def serialize_order_item(item: OrderItem) -> dict:
         "setTypeId": str(item.set_type_id) if item.set_type_id else None,
         "setTypeName": item.set_type.name if item.set_type else None,
         "count": item.count,
+        "returnedCount": total_returned,
+        "remainingCount": item.count - total_returned,
         "unitPrice": float(item.unit_price),
         "totalPrice": float(item.total_price),
     }
@@ -859,9 +894,12 @@ def serialize_order_return(r: OrderReturn) -> dict:
         "orderItemId": str(r.order_item_id),
         "productId": str(r.product_id),
         "productName": r.product.name if r.product else None,
+        "productMrp": float(r.product.mrp) if r.product else None,
+        "productDpPrice": float(r.product.dp_price) if r.product else None,
         "variantId": str(r.variant_id) if r.variant_id else None,
         "variantSize": r.variant.size if r.variant else None,
         "variantColor": r.variant.color if r.variant else None,
+        "variantPattern": r.variant.pattern if r.variant else None,
         "setTypeId": str(r.set_type_id) if r.set_type_id else None,
         "setTypeName": r.set_type.name if r.set_type else None,
         "returnType": r.return_type,
@@ -873,7 +911,41 @@ def serialize_order_return(r: OrderReturn) -> dict:
     }
 
 
+def serialize_order_list(order: Order) -> dict:
+    """Slim serializer for list/search endpoints."""
+    return {
+        "id": str(order.id),
+        "orderNumber": order.order_number,
+        "tenantId": str(order.tenant_id),
+        "tenantName": order.tenant.name if order.tenant else None,
+        "shopId": str(order.shop_id),
+        "shopName": order.shop.name if order.shop else None,
+        "shopPhone": order.shop.phone if order.shop else None,
+        "createdBy": str(order.created_by),
+        "createdByName": _user_full_name(order.creator),
+        "assignedExecutive": str(order.assigned_executive) if order.assigned_executive else None,
+        "assignedExecutiveName": _user_full_name(order.executive),
+        "distributorId": str(order.distributor_id) if order.distributor_id else None,
+        "distributorName": _user_full_name(order.distributor),
+        "parentOrderId": str(order.parent_order_id) if order.parent_order_id else None,
+        "orderType": order.order_type,
+        "status": order.status,
+        "priceType": order.price_type,
+        "discountPercent": float(order.discount_percent),
+        "discountFlat": float(order.discount_flat),
+        "subtotal": float(order.subtotal),
+        "discountAmount": float(order.discount_amount),
+        "totalAmount": float(order.total_amount),
+        "notes": order.notes,
+        "stockDeducted": order.stock_deducted,
+        "itemCount": len(order.items),
+        "createdAt": order.created_at.isoformat(),
+        "updatedAt": order.updated_at.isoformat(),
+    }
+
+
 def serialize_order(order: Order) -> dict:
+    """Full serializer for single order detail."""
     return {
         "id": str(order.id),
         "orderNumber": order.order_number,
@@ -895,6 +967,7 @@ def serialize_order(order: Order) -> dict:
         "parentOrderId": str(order.parent_order_id) if order.parent_order_id else None,
         "orderType": order.order_type,
         "status": order.status,
+        "priceType": order.price_type,
         "discountPercent": float(order.discount_percent),
         "discountFlat": float(order.discount_flat),
         "subtotal": float(order.subtotal),
@@ -912,10 +985,16 @@ def serialize_order(order: Order) -> dict:
                 "orderNumber": co.order_number,
                 "status": co.status,
                 "orderType": co.order_type,
+                "priceType": co.price_type,
                 "subtotal": float(co.subtotal),
+                "discountPercent": float(co.discount_percent),
+                "discountFlat": float(co.discount_flat),
+                "discountAmount": float(co.discount_amount),
                 "totalAmount": float(co.total_amount),
                 "notes": co.notes,
+                "stockDeducted": co.stock_deducted,
                 "isChild": co.parent_order_id is not None,
+                "itemCount": len(co.items),
                 "items": [serialize_order_item(i) for i in co.items],
                 "createdAt": co.created_at.isoformat(),
                 "updatedAt": co.updated_at.isoformat(),

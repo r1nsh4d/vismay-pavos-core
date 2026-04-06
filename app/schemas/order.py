@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional, List, Literal
 from datetime import datetime
-from app.models.order import OrderType, OrderStatus, ReturnType
+from app.models.order import OrderType, OrderStatus, ReturnType, PriceType
 from app.schemas.base import CamelModel
 
 
@@ -25,6 +25,7 @@ class BundleOrderCreate(CamelModel):
     distributor_id: Optional[uuid.UUID] = None
     assigned_executive: Optional[uuid.UUID] = None
     notes: Optional[str] = None
+    price_type: PriceType = PriceType.mrp
     items: List[BundleOrderItemCreate]
 
 
@@ -34,6 +35,7 @@ class IndividualOrderCreate(CamelModel):
     distributor_id: Optional[uuid.UUID] = None
     assigned_executive: Optional[uuid.UUID] = None
     notes: Optional[str] = None
+    price_type: PriceType = PriceType.mrp
     items: List[IndividualOrderItemCreate]
 
 
@@ -111,6 +113,8 @@ class OrderItemResponse(CamelModel):
     set_type_id: Optional[uuid.UUID] = None
     set_type_name: Optional[str] = None
     count: int
+    returned_count: int = 0
+    remaining_count: int = 0
     unit_price: float
     total_price: float
 
@@ -121,9 +125,12 @@ class OrderReturnResponse(CamelModel):
     order_item_id: uuid.UUID
     product_id: uuid.UUID
     product_name: Optional[str] = None
+    product_mrp: Optional[float] = None
+    product_dp_price: Optional[float] = None
     variant_id: Optional[uuid.UUID] = None
     variant_size: Optional[str] = None
     variant_color: Optional[str] = None
+    variant_pattern: Optional[str] = None
     set_type_id: Optional[uuid.UUID] = None
     set_type_name: Optional[str] = None
     return_type: ReturnType
@@ -148,22 +155,52 @@ class ShortfallItemResponse(CamelModel):
     shortfall: int
 
 
-class EstimateSplitResponse(CamelModel):
-    has_shortfall: bool
-    shortfall_items: List[ShortfallItemResponse]
-    fully_available_items: List[OrderItemResponse]
-
-
 class ChildOrderSummary(CamelModel):
     id: uuid.UUID
     order_number: str
     status: OrderStatus
     order_type: OrderType
+    price_type: PriceType
     subtotal: float
+    discount_percent: float
+    discount_flat: float
+    discount_amount: float
     total_amount: float
     notes: Optional[str] = None
+    stock_deducted: bool
     is_child: bool
+    item_count: int = 0
     items: List[OrderItemResponse] = []
+    created_at: datetime
+    updated_at: datetime
+
+
+class OrderListResponse(CamelModel):
+    id: uuid.UUID
+    order_number: str
+    tenant_id: uuid.UUID
+    tenant_name: Optional[str] = None
+    shop_id: uuid.UUID
+    shop_name: Optional[str] = None
+    shop_phone: Optional[str] = None
+    created_by: uuid.UUID
+    created_by_name: Optional[str] = None
+    assigned_executive: Optional[uuid.UUID] = None
+    assigned_executive_name: Optional[str] = None
+    distributor_id: Optional[uuid.UUID] = None
+    distributor_name: Optional[str] = None
+    parent_order_id: Optional[uuid.UUID] = None
+    order_type: OrderType
+    status: OrderStatus
+    price_type: PriceType
+    discount_percent: float
+    discount_flat: float
+    subtotal: float
+    discount_amount: float
+    total_amount: float
+    notes: Optional[str] = None
+    stock_deducted: bool
+    item_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -189,6 +226,7 @@ class OrderResponse(CamelModel):
     parent_order_id: Optional[uuid.UUID] = None
     order_type: OrderType
     status: OrderStatus
+    price_type: PriceType
     discount_percent: float
     discount_flat: float
     subtotal: float

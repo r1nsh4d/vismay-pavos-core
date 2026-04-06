@@ -1,7 +1,7 @@
 import uuid
 import enum
 from typing import Optional
-from sqlalchemy import String, ForeignKey, Boolean, Numeric, Integer, Enum, Text
+from sqlalchemy import String, ForeignKey, Boolean, Numeric, Integer, Enum, Text, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship, backref
 from app.models.base import BaseModel
 
@@ -34,6 +34,11 @@ class ReturnType(str, enum.Enum):
     individual = "individual"
 
 
+class PriceType(str, enum.Enum):
+    mrp = "mrp"
+    dp = "dp"
+
+
 CANCELLABLE_STATUSES = {
     OrderStatus.placed,
     OrderStatus.verified,
@@ -55,26 +60,38 @@ STOCK_RESTORE_STATUSES = {
 
 class Order(BaseModel):
     __tablename__ = "orders"
+    __table_args__ = (
+        Index("ix_orders_tenant_status", "tenant_id", "status"),
+        Index("ix_orders_executive_status", "assigned_executive", "status"),
+        Index("ix_orders_distributor_status", "distributor_id", "status"),
+        Index("ix_orders_shop_id", "shop_id"),
+        Index("ix_orders_created_at", "created_at"),
+        Index("ix_orders_parent_order_id", "parent_order_id"),
+    )
 
     order_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
-    shop_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
-
+    shop_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shops.id"), nullable=False)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     assigned_executive: Mapped[Optional[uuid.UUID]] = mapped_column(
-        ForeignKey("users.id"), nullable=True, index=True
+        ForeignKey("users.id"), nullable=True
     )
     distributor_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        ForeignKey("users.id"), nullable=True, index=True
+        ForeignKey("users.id"), nullable=True
     )
     parent_order_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        ForeignKey("orders.id"), nullable=True, index=True
+        ForeignKey("orders.id"), nullable=True
     )
 
     order_type: Mapped[OrderType] = mapped_column(Enum(OrderType, native_enum=False), nullable=False)
     status: Mapped[OrderStatus] = mapped_column(
         Enum(OrderStatus, native_enum=False),
         default=OrderStatus.placed,
+        nullable=False,
+    )
+    price_type: Mapped[PriceType] = mapped_column(
+        Enum(PriceType, native_enum=False),
+        default=PriceType.mrp,
         nullable=False,
     )
 

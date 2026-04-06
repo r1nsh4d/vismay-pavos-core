@@ -42,7 +42,7 @@ async def search_orders(
         parent_only=parent_only, page=page, limit=limit,
     )
     return PaginatedResponse(
-        data=[order_svc.serialize_order(o) for o in orders],
+        data=[order_svc.serialize_order_list(o) for o in orders],  # ← slim
         message="Orders fetched", page=page, limit=limit, total=total,
     )
 
@@ -60,7 +60,7 @@ async def get_my_orders(
         status=status, page=page, limit=limit,
     )
     return PaginatedResponse(
-        data=[order_svc.serialize_order(o) for o in orders],
+        data=[order_svc.serialize_order_list(o) for o in orders],  # ← slim
         message="My orders fetched", page=page, limit=limit, total=total,
     )
 
@@ -78,7 +78,7 @@ async def get_my_distributor_orders(
         status=status, page=page, limit=limit,
     )
     return PaginatedResponse(
-        data=[order_svc.serialize_order(o) for o in orders],
+        data=[order_svc.serialize_order_list(o) for o in orders],  # ← slim
         message="Distributor orders fetched", page=page, limit=limit, total=total,
     )
 
