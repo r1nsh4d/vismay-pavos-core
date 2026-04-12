@@ -550,7 +550,7 @@ async def split_order(
         parent_order_id=order.id if split_input.create_as == "child" else None,
         order_type=order.order_type,
         price_type=order.price_type,
-        status=OrderStatus.placed,
+        status=OrderStatus.approved,
         placed_at=_now(),
         discount_percent=0,
         discount_flat=0,
