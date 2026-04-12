@@ -1,25 +1,76 @@
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Optional, List, Tuple
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.order import (
-    Order, OrderItem, OrderReturn, OrderStatus, OrderType, ReturnType, PriceType,
-    CANCELLABLE_STATUSES, STOCK_RESTORE_STATUSES,
+    Order, OrderItem, OrderReturn, OrderStatus, OrderType,
+    ReturnType, PriceType, CANCELLABLE_STATUSES, STOCK_RESTORE_STATUSES,
 )
 from app.models.product import Product, ProductVariant
 from app.models.set_type import SetType, SetTypeItem
-from app.models.stock import Stock
-from app.schemas.order import BundleOrderCreate, IndividualOrderCreate, SplitOrderInput, CreateOrderReturnInput
+from app.models.stock import Stock, BundleStock
+from app.schemas.order import (
+    BundleOrderCreate, IndividualOrderCreate,
+    SplitOrderInput, CreateOrderReturnInput,
+)
 from app.core.exceptions import AppException
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _now():
+    return datetime.now(timezone.utc)
+
+
+def _stamp(order: Order, status: OrderStatus) -> None:
+    mapping = {
+        OrderStatus.placed: "placed_at",
+        OrderStatus.verified: "verified_at",
+        OrderStatus.assigned: "assigned_at",
+        OrderStatus.approved: "approved_at",
+        OrderStatus.estimated: "estimated_at",
+        OrderStatus.billed: "billed_at",
+        OrderStatus.packing: "packing_at",
+        OrderStatus.dispatched: "dispatched_at",
+        OrderStatus.delivered: "delivered_at",
+        OrderStatus.cancelled: "cancelled_at",
+        OrderStatus.rejected: "rejected_at",
+        OrderStatus.returned: "returned_at",
+    }
+    field = mapping.get(status)
+    if field and not getattr(order, field):
+        setattr(order, field, _now())
+
+
+def _user_full_name(user) -> Optional[str]:
+    if not user:
+        return None
+    return f"{user.first_name} {user.last_name}".strip() if user.last_name else user.first_name
+
+
+def _get_unit_price(product: Product, price_type: PriceType) -> float:
+    if price_type == PriceType.dp:
+        return float(product.dp_price)
+    return float(product.mrp)
+
+
+def _recalculate_totals(order: Order, items=None) -> None:
+    source = items if items is not None else order.items
+    subtotal = sum(float(i.total_price) for i in source)
+    percent_discount = round(subtotal * float(order.discount_percent) / 100, 2)
+    flat_discount = float(order.discount_flat)
+    discount_amount = round(min(percent_discount + flat_discount, subtotal), 2)
+    order.subtotal = subtotal
+    order.discount_amount = discount_amount
+    order.total_amount = round(subtotal - discount_amount, 2)
 
 
 # ── Queries ────────────────────────────────────────────────────────────────────
 
 def _order_list_query():
-    """Lightweight — for list/search endpoints."""
     return (
         select(Order)
         .where(Order.is_deleted == False)  # noqa
@@ -37,7 +88,6 @@ def _order_list_query():
 
 
 def _order_detail_query():
-    """Full load — for single order fetch only."""
     return (
         select(Order)
         .where(Order.is_deleted == False)  # noqa
@@ -84,8 +134,6 @@ async def search_orders(
     page: int = 1,
     limit: int = 20,
 ) -> Tuple[List[Order], int]:
-
-    # build filters separately for fast count
     filters = [Order.is_deleted == False]  # noqa
 
     if parent_only:
@@ -107,12 +155,10 @@ async def search_orders(
     if date_to:
         filters.append(Order.created_at <= datetime.combine(date_to, datetime.max.time()))
 
-    # fast count — direct, no joins, no subquery
     total = (await db.execute(
         select(func.count(Order.id)).where(*filters)
     )).scalar() or 0
 
-    # data fetch — lightweight query
     result = await db.execute(
         _order_list_query()
         .where(*filters)
@@ -132,14 +178,6 @@ async def _generate_order_number(db: AsyncSession) -> str:
         select(func.count()).where(Order.order_number.like(f"{prefix}%"))
     )).scalar() or 0
     return f"{prefix}{str(count + 1).zfill(4)}"
-
-
-# ── Price helper ───────────────────────────────────────────────────────────────
-
-def _get_unit_price(product: Product, price_type: PriceType) -> float:
-    if price_type == PriceType.dp:
-        return float(product.dp_price)
-    return float(product.mrp)
 
 
 # ── Stock helpers ──────────────────────────────────────────────────────────────
@@ -192,7 +230,6 @@ async def _deduct_stock_for_item(
         stock = await db.scalar(select(Stock).where(Stock.variant_id == item.variant_id))
         if stock:
             stock.individual_count -= count
-
     elif order_type == OrderType.bundle:
         size_items = (await db.execute(
             select(SetTypeItem).where(SetTypeItem.set_type_id == item.set_type_id)
@@ -217,7 +254,6 @@ async def _deduct_stock_for_item(
             )
             if bundle_stock:
                 bundle_stock.bundle_count -= count * si.quantity
-
     await db.flush()
 
 
@@ -228,7 +264,6 @@ async def _restore_stock_for_item(
         stock = await db.scalar(select(Stock).where(Stock.variant_id == item.variant_id))
         if stock:
             stock.individual_count += count
-
     elif order_type == OrderType.bundle:
         size_items = (await db.execute(
             select(SetTypeItem).where(SetTypeItem.set_type_id == item.set_type_id)
@@ -253,26 +288,12 @@ async def _restore_stock_for_item(
             )
             if bundle_stock:
                 bundle_stock.bundle_count += count * si.quantity
-
     await db.flush()
 
 
 async def _restore_all_stock(db: AsyncSession, order: Order) -> None:
     for item in order.items:
         await _restore_stock_for_item(db, item, order.order_type, item.count)
-
-
-# ── Totals ─────────────────────────────────────────────────────────────────────
-
-def _recalculate_totals(order: Order, items=None) -> None:
-    source = items if items is not None else order.items
-    subtotal = sum(float(i.total_price) for i in source)
-    percent_discount = round(subtotal * float(order.discount_percent) / 100, 2)
-    flat_discount = float(order.discount_flat)
-    discount_amount = round(min(percent_discount + flat_discount, subtotal), 2)
-    order.subtotal = subtotal
-    order.discount_amount = discount_amount
-    order.total_amount = round(subtotal - discount_amount, 2)
 
 
 # ── Create ─────────────────────────────────────────────────────────────────────
@@ -300,6 +321,7 @@ async def create_bundle_order(
         discount_amount=0,
         total_amount=0,
         stock_deducted=False,
+        placed_at=_now(),
     )
     db.add(order)
     await db.flush()
@@ -360,6 +382,7 @@ async def create_individual_order(
         discount_amount=0,
         total_amount=0,
         stock_deducted=False,
+        placed_at=_now(),
     )
     db.add(order)
     await db.flush()
@@ -405,7 +428,50 @@ async def create_individual_order(
     return await get_order_by_id(db, order.id)
 
 
-# ── Estimate split preview (read-only) ────────────────────────────────────────
+# ── Edit item at pre-bill stage ────────────────────────────────────────────────
+
+async def update_order_item(
+    db: AsyncSession,
+    order: Order,
+    order_item_id: uuid.UUID,
+    new_count: int,
+) -> Order:
+    item = next((i for i in order.items if i.id == order_item_id), None)
+    if not item:
+        raise AppException(status_code=404, detail="Order item not found")
+    if new_count <= 0:
+        raise AppException(status_code=400, detail="Count must be greater than 0")
+
+    old_count = item.count
+    diff = new_count - old_count
+
+    if diff > 0:
+        if order.order_type == OrderType.individual:
+            available = await _get_available_individual(db, item.variant_id)
+            if available < diff:
+                raise AppException(
+                    status_code=400,
+                    detail=f"Only {available} units available, cannot increase by {diff}"
+                )
+        else:
+            available = await _get_available_bundle(db, item.product_id, item.set_type_id)
+            if available < diff:
+                raise AppException(
+                    status_code=400,
+                    detail=f"Only {available} bundles available, cannot increase by {diff}"
+                )
+        await _deduct_stock_for_item(db, item, order.order_type, diff)
+    elif diff < 0:
+        await _restore_stock_for_item(db, item, order.order_type, abs(diff))
+
+    item.count = new_count
+    item.total_price = float(item.unit_price) * new_count
+    _recalculate_totals(order)
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+# ── Estimate split preview ─────────────────────────────────────────────────────
 
 async def get_estimate_split_preview(db: AsyncSession, order: Order) -> dict:
     shortfall_items = []
@@ -447,17 +513,6 @@ async def get_estimate_split_preview(db: AsyncSession, order: Order) -> dict:
     }
 
 
-# ── Estimate ───────────────────────────────────────────────────────────────────
-
-async def estimate_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
-    _recalculate_totals(order)
-    order.status = OrderStatus.estimated
-    if notes:
-        order.notes = notes
-    await db.flush()
-    return await get_order_by_id(db, order.id)
-
-
 # ── Split ──────────────────────────────────────────────────────────────────────
 
 async def split_order(
@@ -496,6 +551,7 @@ async def split_order(
         order_type=order.order_type,
         price_type=order.price_type,
         status=OrderStatus.placed,
+        placed_at=_now(),
         discount_percent=0,
         discount_flat=0,
         subtotal=0,
@@ -550,6 +606,7 @@ async def split_order(
 
 async def verify_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
     order.status = OrderStatus.verified
+    _stamp(order, OrderStatus.verified)
     if notes:
         order.notes = notes
     await db.flush()
@@ -561,6 +618,7 @@ async def assign_distributor(
 ) -> Order:
     order.distributor_id = distributor_id
     order.status = OrderStatus.assigned
+    _stamp(order, OrderStatus.assigned)
     if notes:
         order.notes = notes
     await db.flush()
@@ -569,6 +627,7 @@ async def assign_distributor(
 
 async def approve_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
     order.status = OrderStatus.approved
+    _stamp(order, OrderStatus.approved)
     if notes:
         order.notes = notes
     await db.flush()
@@ -596,6 +655,7 @@ async def reject_order(db: AsyncSession, order: Order, notes: Optional[str]) -> 
         await _restore_all_stock(db, order)
         order.stock_deducted = False
     order.status = OrderStatus.rejected
+    _stamp(order, OrderStatus.rejected)
     if notes:
         order.notes = notes
     await db.flush()
@@ -612,6 +672,17 @@ async def cancel_order(db: AsyncSession, order: Order, notes: Optional[str]) -> 
         await _restore_all_stock(db, order)
         order.stock_deducted = False
     order.status = OrderStatus.cancelled
+    _stamp(order, OrderStatus.cancelled)
+    if notes:
+        order.notes = notes
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def estimate_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
+    _recalculate_totals(order)
+    order.status = OrderStatus.estimated
+    _stamp(order, OrderStatus.estimated)
     if notes:
         order.notes = notes
     await db.flush()
@@ -620,6 +691,7 @@ async def cancel_order(db: AsyncSession, order: Order, notes: Optional[str]) -> 
 
 async def bill_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
     order.status = OrderStatus.billed
+    _stamp(order, OrderStatus.billed)
     if notes:
         order.notes = notes
     await db.flush()
@@ -648,16 +720,9 @@ async def apply_discount(
     return await get_order_by_id(db, order.id)
 
 
-async def move_to_counting(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
-    order.status = OrderStatus.counting
-    if notes:
-        order.notes = notes
-    await db.flush()
-    return await get_order_by_id(db, order.id)
-
-
 async def move_to_packing(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
     order.status = OrderStatus.packing
+    _stamp(order, OrderStatus.packing)
     if notes:
         order.notes = notes
     await db.flush()
@@ -665,15 +730,19 @@ async def move_to_packing(db: AsyncSession, order: Order, notes: Optional[str]) 
 
 
 async def dispatch_order(
-    db: AsyncSession, order: Order,
+    db: AsyncSession,
+    order: Order,
     delivery_partner: str,
     tracking_number: Optional[str],
+    tracking_link: Optional[str],
     delivery_notes: Optional[str],
     notes: Optional[str],
 ) -> Order:
     order.status = OrderStatus.dispatched
+    _stamp(order, OrderStatus.dispatched)
     order.delivery_partner = delivery_partner
     order.tracking_number = tracking_number
+    order.tracking_link = tracking_link
     order.delivery_notes = delivery_notes
     if notes:
         order.notes = notes
@@ -683,6 +752,17 @@ async def dispatch_order(
 
 async def deliver_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
     order.status = OrderStatus.delivered
+    _stamp(order, OrderStatus.delivered)
+    if notes:
+        order.notes = notes
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
+async def update_delivered_at(
+    db: AsyncSession, order: Order, delivered_at: datetime, notes: Optional[str]
+) -> Order:
+    order.delivered_at = delivered_at
     if notes:
         order.notes = notes
     await db.flush()
@@ -715,27 +795,21 @@ async def process_return(
         if ri.count <= 0:
             raise AppException(status_code=400, detail="Return count must be greater than 0")
 
-        already_returned_result = await db.execute(
+        already_returned = (await db.execute(
             select(func.coalesce(func.sum(OrderReturn.count), 0)).where(
                 OrderReturn.order_item_id == ri.order_item_id,
                 OrderReturn.order_id == order.id,
             )
-        )
-        total_already_returned = already_returned_result.scalar() or 0
+        )).scalar() or 0
 
-        if total_already_returned + ri.count > order_item.count:
+        if already_returned + ri.count > order_item.count:
             raise AppException(
                 status_code=400,
-                detail=f"Total returned ({total_already_returned + ri.count}) exceeds "
+                detail=f"Total returned ({already_returned + ri.count}) exceeds "
                        f"original count ({order_item.count}) for item {ri.order_item_id}"
             )
 
-        await _restore_stock_by_return_type(
-            db=db,
-            order_item=order_item,
-            return_type=ri.return_type,
-            count=ri.count,
-        )
+        await _restore_stock_by_return_type(db, order_item, ri.return_type, ri.count)
 
         order_return = OrderReturn(
             order_id=order.id,
@@ -754,7 +828,6 @@ async def process_return(
     await db.flush()
     await _update_order_return_status(db, order)
     await db.flush()
-
     return created_returns
 
 
@@ -821,18 +894,17 @@ async def _restore_stock_by_return_type(
 
 async def _update_order_return_status(db: AsyncSession, order: Order) -> None:
     total_ordered = sum(item.count for item in order.items)
-
-    total_returned_result = await db.execute(
+    total_returned = (await db.execute(
         select(func.coalesce(func.sum(OrderReturn.count), 0)).where(
             OrderReturn.order_id == order.id
         )
-    )
-    total_returned = total_returned_result.scalar() or 0
+    )).scalar() or 0
 
     if total_returned <= 0:
         return
     elif total_returned >= total_ordered:
         order.status = OrderStatus.returned
+        _stamp(order, OrderStatus.returned)
         order.stock_deducted = False
     else:
         order.status = OrderStatus.partially_returned
@@ -857,14 +929,12 @@ async def get_returns_for_order(
 
 # ── Serialization ──────────────────────────────────────────────────────────────
 
-def _user_full_name(user) -> Optional[str]:
-    if not user:
-        return None
-    return f"{user.first_name} {user.last_name}".strip() if user.last_name else user.first_name
+def _ts(val) -> Optional[str]:
+    return val.isoformat() if val else None
 
 
 def serialize_order_item(item: OrderItem) -> dict:
-    total_returned = sum(r.count for r in item.item_returns) if hasattr(item, 'item_returns') and item.item_returns else 0
+    total_returned = sum(r.count for r in item.item_returns) if hasattr(item, "item_returns") and item.item_returns else 0
     return {
         "id": str(item.id),
         "productId": str(item.product_id),
@@ -888,14 +958,19 @@ def serialize_order_item(item: OrderItem) -> dict:
 
 
 def serialize_order_return(r: OrderReturn) -> dict:
+    processor = r.processor
+    processor_name = None
+    if processor:
+        processor_name = (
+            f"{processor.first_name} {processor.last_name}".strip()
+            if processor.last_name else processor.first_name
+        )
     return {
         "id": str(r.id),
         "orderId": str(r.order_id),
         "orderItemId": str(r.order_item_id),
         "productId": str(r.product_id),
         "productName": r.product.name if r.product else None,
-        "productMrp": float(r.product.mrp) if r.product else None,
-        "productDpPrice": float(r.product.dp_price) if r.product else None,
         "variantId": str(r.variant_id) if r.variant_id else None,
         "variantSize": r.variant.size if r.variant else None,
         "variantColor": r.variant.color if r.variant else None,
@@ -905,14 +980,13 @@ def serialize_order_return(r: OrderReturn) -> dict:
         "returnType": r.return_type,
         "count": r.count,
         "processedBy": str(r.processed_by),
-        "processedByName": _user_full_name(r.processor),
+        "processedByName": processor_name,
         "notes": r.notes,
         "createdAt": r.created_at.isoformat(),
     }
 
 
 def serialize_order_list(order: Order) -> dict:
-    """Slim serializer for list/search endpoints."""
     return {
         "id": str(order.id),
         "orderNumber": order.order_number,
@@ -939,13 +1013,13 @@ def serialize_order_list(order: Order) -> dict:
         "notes": order.notes,
         "stockDeducted": order.stock_deducted,
         "itemCount": len(order.items),
+        "placedAt": _ts(order.placed_at),
         "createdAt": order.created_at.isoformat(),
         "updatedAt": order.updated_at.isoformat(),
     }
 
 
 def serialize_order(order: Order) -> dict:
-    """Full serializer for single order detail."""
     return {
         "id": str(order.id),
         "orderNumber": order.order_number,
@@ -977,7 +1051,22 @@ def serialize_order(order: Order) -> dict:
         "stockDeducted": order.stock_deducted,
         "deliveryPartner": order.delivery_partner,
         "trackingNumber": order.tracking_number,
+        "trackingLink": order.tracking_link,
         "deliveryNotes": order.delivery_notes,
+        "statusTimestamps": {
+            "placedAt": _ts(order.placed_at),
+            "verifiedAt": _ts(order.verified_at),
+            "assignedAt": _ts(order.assigned_at),
+            "approvedAt": _ts(order.approved_at),
+            "estimatedAt": _ts(order.estimated_at),
+            "billedAt": _ts(order.billed_at),
+            "packingAt": _ts(order.packing_at),
+            "dispatchedAt": _ts(order.dispatched_at),
+            "deliveredAt": _ts(order.delivered_at),
+            "cancelledAt": _ts(order.cancelled_at),
+            "rejectedAt": _ts(order.rejected_at),
+            "returnedAt": _ts(order.returned_at),
+        },
         "items": [serialize_order_item(i) for i in order.items],
         "childOrders": [
             {
@@ -996,6 +1085,7 @@ def serialize_order(order: Order) -> dict:
                 "isChild": co.parent_order_id is not None,
                 "itemCount": len(co.items),
                 "items": [serialize_order_item(i) for i in co.items],
+                "placedAt": _ts(co.placed_at),
                 "createdAt": co.created_at.isoformat(),
                 "updatedAt": co.updated_at.isoformat(),
             }

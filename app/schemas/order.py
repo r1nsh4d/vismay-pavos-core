@@ -39,20 +39,16 @@ class IndividualOrderCreate(CamelModel):
     items: List[IndividualOrderItemCreate]
 
 
-# ── Notes ──────────────────────────────────────────────────────────────────────
+# ── Updates ────────────────────────────────────────────────────────────────────
 
 class OrderNoteUpdate(CamelModel):
     notes: Optional[str] = None
 
 
-# ── Assign distributor ─────────────────────────────────────────────────────────
-
 class OrderAssignDistributorInput(CamelModel):
     distributor_id: uuid.UUID
     notes: Optional[str] = None
 
-
-# ── Discount ───────────────────────────────────────────────────────────────────
 
 class OrderDiscountUpdate(CamelModel):
     discount_percent: Optional[float] = None
@@ -60,13 +56,21 @@ class OrderDiscountUpdate(CamelModel):
     notes: Optional[str] = None
 
 
-# ── Dispatch ───────────────────────────────────────────────────────────────────
-
 class OrderDispatchInput(CamelModel):
     delivery_partner: str
     tracking_number: Optional[str] = None
+    tracking_link: Optional[str] = None
     delivery_notes: Optional[str] = None
     notes: Optional[str] = None
+
+
+class UpdateDeliveredAtInput(CamelModel):
+    delivered_at: datetime
+    notes: Optional[str] = None
+
+
+class UpdateOrderItemInput(CamelModel):
+    count: int
 
 
 # ── Split ──────────────────────────────────────────────────────────────────────
@@ -96,7 +100,7 @@ class CreateOrderReturnInput(CamelModel):
     notes: Optional[str] = None
 
 
-# ── Response ───────────────────────────────────────────────────────────────────
+# ── Responses ──────────────────────────────────────────────────────────────────
 
 class OrderItemResponse(CamelModel):
     id: uuid.UUID
@@ -125,12 +129,9 @@ class OrderReturnResponse(CamelModel):
     order_item_id: uuid.UUID
     product_id: uuid.UUID
     product_name: Optional[str] = None
-    product_mrp: Optional[float] = None
-    product_dp_price: Optional[float] = None
     variant_id: Optional[uuid.UUID] = None
     variant_size: Optional[str] = None
     variant_color: Optional[str] = None
-    variant_pattern: Optional[str] = None
     set_type_id: Optional[uuid.UUID] = None
     set_type_name: Optional[str] = None
     return_type: ReturnType
@@ -139,20 +140,6 @@ class OrderReturnResponse(CamelModel):
     processed_by_name: Optional[str] = None
     notes: Optional[str] = None
     created_at: datetime
-
-
-class ShortfallItemResponse(CamelModel):
-    order_item_id: uuid.UUID
-    product_id: uuid.UUID
-    product_name: Optional[str] = None
-    variant_id: Optional[uuid.UUID] = None
-    variant_size: Optional[str] = None
-    variant_color: Optional[str] = None
-    set_type_id: Optional[uuid.UUID] = None
-    set_type_name: Optional[str] = None
-    requested: int
-    available: int
-    shortfall: int
 
 
 class ChildOrderSummary(CamelModel):
@@ -173,6 +160,21 @@ class ChildOrderSummary(CamelModel):
     items: List[OrderItemResponse] = []
     created_at: datetime
     updated_at: datetime
+
+
+class StatusTimestamps(CamelModel):
+    placed_at: Optional[datetime] = None
+    verified_at: Optional[datetime] = None
+    assigned_at: Optional[datetime] = None
+    approved_at: Optional[datetime] = None
+    estimated_at: Optional[datetime] = None
+    billed_at: Optional[datetime] = None
+    packing_at: Optional[datetime] = None
+    dispatched_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    rejected_at: Optional[datetime] = None
+    returned_at: Optional[datetime] = None
 
 
 class OrderListResponse(CamelModel):
@@ -201,6 +203,7 @@ class OrderListResponse(CamelModel):
     notes: Optional[str] = None
     stock_deducted: bool
     item_count: int = 0
+    placed_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -236,7 +239,9 @@ class OrderResponse(CamelModel):
     stock_deducted: bool
     delivery_partner: Optional[str] = None
     tracking_number: Optional[str] = None
+    tracking_link: Optional[str] = None
     delivery_notes: Optional[str] = None
+    status_timestamps: Optional[StatusTimestamps] = None
     items: List[OrderItemResponse] = []
     child_orders: List[ChildOrderSummary] = []
     order_returns: List[OrderReturnResponse] = []

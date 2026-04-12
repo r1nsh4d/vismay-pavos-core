@@ -1,7 +1,7 @@
 import uuid
 import enum
 from typing import Optional
-from sqlalchemy import String, ForeignKey, Boolean, Numeric, Integer, Enum, Text, Index
+from sqlalchemy import String, ForeignKey, Boolean, Numeric, Integer, Enum, Text, Index, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship, backref
 from app.models.base import BaseModel
 
@@ -21,7 +21,6 @@ class OrderStatus(str, enum.Enum):
     cancelled = "cancelled"
     estimated = "estimated"
     billed = "billed"
-    counting = "counting"
     packing = "packing"
     dispatched = "dispatched"
     delivered = "delivered"
@@ -73,26 +72,16 @@ class Order(BaseModel):
     tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
     shop_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shops.id"), nullable=False)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
-    assigned_executive: Mapped[Optional[uuid.UUID]] = mapped_column(
-        ForeignKey("users.id"), nullable=True
-    )
-    distributor_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        ForeignKey("users.id"), nullable=True
-    )
-    parent_order_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        ForeignKey("orders.id"), nullable=True
-    )
+    assigned_executive: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    distributor_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    parent_order_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("orders.id"), nullable=True)
 
     order_type: Mapped[OrderType] = mapped_column(Enum(OrderType, native_enum=False), nullable=False)
     status: Mapped[OrderStatus] = mapped_column(
-        Enum(OrderStatus, native_enum=False),
-        default=OrderStatus.placed,
-        nullable=False,
+        Enum(OrderStatus, native_enum=False), default=OrderStatus.placed, nullable=False
     )
     price_type: Mapped[PriceType] = mapped_column(
-        Enum(PriceType, native_enum=False),
-        default=PriceType.mrp,
-        nullable=False,
+        Enum(PriceType, native_enum=False), default=PriceType.mrp, nullable=False
     )
 
     discount_percent: Mapped[float] = mapped_column(Numeric(5, 2), default=0, nullable=False)
@@ -104,10 +93,27 @@ class Order(BaseModel):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     stock_deducted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Delivery info
     delivery_partner: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     tracking_number: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    tracking_link: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     delivery_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Status timestamps
+    placed_at: Mapped[Optional[str]] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_at: Mapped[Optional[str]] = mapped_column(DateTime(timezone=True), nullable=True)
+    assigned_at: Mapped[Optional[str]] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[Optional[str]] = mapped_column(DateTime(timezone=True), nullable=True)
+    estimated_at: Mapped[Optional[str]] = mapped_column(DateTime(timezone=True), nullable=True)
+    billed_at: Mapped[Optional[str]] = mapped_column(DateTime(timezone=True), nullable=True)
+    packing_at: Mapped[Optional[str]] = mapped_column(DateTime(timezone=True), nullable=True)
+    dispatched_at: Mapped[Optional[str]] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivered_at: Mapped[Optional[str]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[Optional[str]] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_at: Mapped[Optional[str]] = mapped_column(DateTime(timezone=True), nullable=True)
+    returned_at: Mapped[Optional[str]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Relationships
     tenant = relationship("Tenant", backref="orders")
     shop = relationship("Shop", backref="orders")
     creator = relationship("User", foreign_keys=[created_by], backref="created_orders")

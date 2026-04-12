@@ -10,6 +10,7 @@ from app.routers import users, categories, set_types, products, stocks, states
 from app.routers import orders, targets
 from app.routers import roles, permissions, seed
 from app.routers import shop
+from app.routers import reports
 
 import app.models  # noqa: F401 — registers all models on Base.metadata
 
@@ -63,6 +64,7 @@ app.include_router(media.router, prefix=API_PREFIX)   # ← ADD
 app.include_router(stocks.router, prefix=API_PREFIX)
 app.include_router(orders.router, prefix=API_PREFIX)
 app.include_router(targets.router, prefix=API_PREFIX)
+app.include_router(reports.router, prefix=API_PREFIX)
 
 @app.get("/", tags=["Health"])
 async def root():
