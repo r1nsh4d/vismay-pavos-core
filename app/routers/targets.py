@@ -19,13 +19,39 @@ async def set_target(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Admin/SCM sets monthly target for an executive."""
+    """
+    Admin sets target for an executive.
+
+    Examples:
+    - order_count: { targetType: "order_count", targetValue: 50 }
+    - order_value: { targetType: "order_value", targetValue: 500000 }
+    - category_quantity: { targetType: "category_quantity", categoryId: "uuid", targetValue: 1000 }
+    """
     target = await target_svc.set_target(db, target_in)
     await db.commit()
     return ResponseModel(
-        data=TargetResponse.model_validate(target).model_dump(by_alias=True),
+        data=target_svc.serialize_target(target),
         message="Target set successfully",
     )
+
+
+@router.get("/all-executives", response_model=CommonResponse)
+async def get_all_executives_summary(
+    year: int | None = None,
+    month: int | None = None,
+    tenant_id: uuid.UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Admin view — all executives and their achievement this month."""
+    now = datetime.utcnow()
+    summaries = await target_svc.get_all_executives_summary(
+        db,
+        year=year or now.year,
+        month=month or now.month,
+        tenant_id=tenant_id,
+    )
+    return ResponseModel(data=summaries, message="All executives summary fetched")
 
 
 @router.get("/{user_id}", response_model=CommonResponse)
@@ -36,15 +62,16 @@ async def get_targets(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get all targets for an executive for a given month."""
+    """Get all targets set for an executive for a given month."""
     now = datetime.utcnow()
     targets = await target_svc.get_targets_by_user(
-        db, user_id=user_id,
+        db,
+        user_id=user_id,
         year=year or now.year,
         month=month or now.month,
     )
     return ResponseModel(
-        data=[TargetResponse.model_validate(t).model_dump(by_alias=True) for t in targets],
+        data=[target_svc.serialize_target(t) for t in targets],
         message="Targets fetched",
     )
 
@@ -57,10 +84,11 @@ async def get_achievement(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get achievement summary vs targets for an executive."""
+    """Get achievement vs targets for an executive."""
     now = datetime.utcnow()
     summary = await target_svc.get_achievement_summary(
-        db, user_id=user_id,
+        db,
+        user_id=user_id,
         year=year or now.year,
         month=month or now.month,
     )
@@ -77,7 +105,8 @@ async def get_my_achievement(
     """Executive checks their own achievement."""
     now = datetime.utcnow()
     summary = await target_svc.get_achievement_summary(
-        db, user_id=current_user.id,
+        db,
+        user_id=current_user.id,
         year=year or now.year,
         month=month or now.month,
     )

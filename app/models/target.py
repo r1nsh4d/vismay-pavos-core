@@ -7,15 +7,19 @@ from app.models.base import BaseModel
 
 
 class TargetType(str, enum.Enum):
-    order_count = "order_count"
-    order_value = "order_value"
+    order_count = "order_count"      # number of orders
+    order_value = "order_value"      # total order value in ₹
+    category_quantity = "category_quantity"  # pieces of a specific category
 
 
 class ExecutiveTarget(BaseModel):
     __tablename__ = "executive_targets"
 
     __table_args__ = (
-        UniqueConstraint("user_id", "year", "month", "target_type", name="uq_executive_target"),
+        UniqueConstraint(
+            "user_id", "year", "month", "target_type", "category_id",
+            name="uq_executive_target"
+        ),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
@@ -23,8 +27,15 @@ class ExecutiveTarget(BaseModel):
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     month: Mapped[int] = mapped_column(Integer, nullable=False)
     target_type: Mapped[TargetType] = mapped_column(Enum(TargetType, native_enum=False), nullable=False)
+
+    # For category_quantity targets — which category this target applies to
+    category_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("categories.id"), nullable=True, index=True
+    )
+
     target_value: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     notes: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     user = relationship("User", backref="targets")
     tenant = relationship("Tenant", backref="executive_targets")
+    category = relationship("Category", backref="executive_targets")

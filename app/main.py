@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.database import engine, Base
-from app.routers import auth, tenants, districts, taluk, product_models, media
+from app.routers import auth, tenants, districts, taluk, product_models, media, attendance
 from app.routers import users, categories, set_types, products, stocks, states
 from app.routers import orders, targets
 from app.routers import roles, permissions, seed
@@ -64,7 +64,9 @@ app.include_router(media.router, prefix=API_PREFIX)   # ← ADD
 app.include_router(stocks.router, prefix=API_PREFIX)
 app.include_router(orders.router, prefix=API_PREFIX)
 app.include_router(targets.router, prefix=API_PREFIX)
+app.include_router(attendance.router, prefix=API_PREFIX)
 app.include_router(reports.router, prefix=API_PREFIX)
+
 
 @app.get("/", tags=["Health"])
 async def root():

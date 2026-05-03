@@ -11,7 +11,12 @@ class TargetCreate(CamelModel):
     month: int
     target_type: TargetType
     target_value: float
+    category_id: Optional[uuid.UUID] = None  # required when target_type = category_quantity
     notes: Optional[str] = None
+
+    def validate_category(self):
+        if self.target_type == TargetType.category_quantity and not self.category_id:
+            raise ValueError("category_id is required for category_quantity target type")
 
 
 class TargetResponse(CamelModel):
@@ -22,4 +27,6 @@ class TargetResponse(CamelModel):
     month: int
     target_type: TargetType
     target_value: float
+    category_id: Optional[uuid.UUID] = None
+    category_name: Optional[str] = None
     notes: Optional[str] = None
