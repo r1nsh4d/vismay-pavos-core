@@ -51,6 +51,15 @@ def _user_full_name(user) -> Optional[str]:
     return f"{user.first_name} {user.last_name}".strip() if user.last_name else user.first_name
 
 
+def _distributor_name(user) -> Optional[str]:
+    """Returns business_name from profile_data if available, else full name."""
+    if not user:
+        return None
+    if user.profile_data and user.profile_data.get("business_name"):
+        return user.profile_data["business_name"]
+    return _user_full_name(user)
+
+
 def _get_unit_price(product: Product, price_type: PriceType) -> float:
     if price_type == PriceType.dp:
         return float(product.dp_price)
@@ -1000,7 +1009,7 @@ def serialize_order_list(order: Order) -> dict:
         "assignedExecutive": str(order.assigned_executive) if order.assigned_executive else None,
         "assignedExecutiveName": _user_full_name(order.executive),
         "distributorId": str(order.distributor_id) if order.distributor_id else None,
-        "distributorName": _user_full_name(order.distributor),
+        "distributorName": _distributor_name(order.distributor),
         "parentOrderId": str(order.parent_order_id) if order.parent_order_id else None,
         "orderType": order.order_type,
         "status": order.status,
@@ -1036,7 +1045,7 @@ def serialize_order(order: Order) -> dict:
         "assignedExecutive": str(order.assigned_executive) if order.assigned_executive else None,
         "assignedExecutiveName": _user_full_name(order.executive),
         "distributorId": str(order.distributor_id) if order.distributor_id else None,
-        "distributorName": _user_full_name(order.distributor),
+        "distributorName": _distributor_name(order.distributor),
         "distributorPhone": order.distributor.phone if order.distributor else None,
         "parentOrderId": str(order.parent_order_id) if order.parent_order_id else None,
         "orderType": order.order_type,
