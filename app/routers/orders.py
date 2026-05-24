@@ -286,7 +286,7 @@ async def approve_order(
     order = await order_svc.get_order_by_id(db, order_id)
     if not order:
         return ErrorResponseModel(code=404, message="Order not found", error={})
-    if order.status != OrderStatus.assigned:
+    if order.status not in (OrderStatus.assigned, OrderStatus.on_hold):
         return ErrorResponseModel(code=400, message="Only assigned orders can be approved", error={})
     order = await order_svc.approve_order(db, order, notes=body.notes)
     await db.commit()
@@ -536,3 +536,22 @@ async def delete_order(
     await order_svc.soft_delete_order(db, order)
     await db.commit()
     return ResponseModel(data=None, message="Order deleted")
+
+
+@router.get("/{order_id}/hierarchy", response_model=CommonResponse)
+async def get_order_hierarchy(
+    order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Returns the complete parent → child → grandchild tree for any order in the chain.
+
+    Pass any order ID in the chain (A, B, or C) and you'll get the full tree
+    rooted at the topmost ancestor, plus aggregate totals across all orders.
+    """
+    result = await order_svc.get_order_hierarchy(db, order_id)
+    if result is None:
+        return ErrorResponseModel(code=404, message="Order not found", error={})
+    return ResponseModel(data=result, message="Order hierarchy fetched")
+

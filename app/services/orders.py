@@ -530,6 +530,7 @@ async def split_order(
     split_input: SplitOrderInput,
     created_by: uuid.UUID,
 ) -> Order:
+    # ── 1. Validate the split request against parent's current items ──────
     parent_items_by_id = {item.id: item for item in order.items}
     validated = []
 
@@ -549,6 +550,16 @@ async def split_order(
             )
         validated.append({"parent_item": parent_item, "split_count": si.count})
 
+    # Sanity guard: refuse to move EVERY line item — parent would be empty.
+    if len(validated) == len(order.items) and all(
+        v["split_count"] == v["parent_item"].count for v in validated
+    ):
+        raise AppException(
+            status_code=400,
+            detail="Cannot split all items — parent order would become empty"
+        )
+
+    # ── 2. Create the new (child or sibling) order shell ─────────────────
     new_order = Order(
         order_number=await _generate_order_number(db),
         tenant_id=order.tenant_id,
@@ -572,12 +583,16 @@ async def split_order(
     db.add(new_order)
     await db.flush()
 
+    # ── 3. Move items: create new on child, reduce or mark-for-removal on parent ──
+    new_items: List[OrderItem] = []
+    items_to_remove: List[OrderItem] = []
+
     for v in validated:
         parent_item = v["parent_item"]
         split_count = v["split_count"]
         remaining = parent_item.count - split_count
 
-        db.add(OrderItem(
+        new_item = OrderItem(
             order_id=new_order.id,
             product_id=parent_item.product_id,
             variant_id=parent_item.variant_id,
@@ -585,29 +600,35 @@ async def split_order(
             count=split_count,
             unit_price=parent_item.unit_price,
             total_price=float(parent_item.unit_price) * split_count,
-        ))
+        )
+        db.add(new_item)
+        new_items.append(new_item)
 
         if remaining == 0:
-            await db.delete(parent_item)
+            # Whole line moves to child — drop from parent
+            items_to_remove.append(parent_item)
         else:
+            # Partial move — reduce on parent
             parent_item.count = remaining
             parent_item.total_price = float(parent_item.unit_price) * remaining
 
-    await db.flush()
-
-    parent_result = await db.execute(
-        select(Order).where(Order.id == order.id).options(selectinload(Order.items))
-    )
-    refreshed_parent = parent_result.scalar_one()
-    _recalculate_totals(refreshed_parent)
-
-    new_result = await db.execute(
-        select(Order).where(Order.id == new_order.id).options(selectinload(Order.items))
-    )
-    refreshed_new = new_result.scalar_one()
-    _recalculate_totals(refreshed_new)
+    # ── 4. Sync the in-memory collection with the DB delete ──────────────
+    # This is the critical fix: without remove(), order.items still holds the
+    # deleted rows in memory, _recalculate_totals sums them, and the wrong
+    # subtotal gets persisted. The remove() keeps both sides consistent.
+    for item in items_to_remove:
+        if item in order.items:
+            order.items.remove(item)
+        await db.delete(item)
 
     await db.flush()
+
+    # ── 5. Recalculate totals using the now-correct in-memory state ──────
+    _recalculate_totals(order)
+    _recalculate_totals(new_order, items=new_items)
+
+    await db.flush()
+
     return await get_order_by_id(db, new_order.id)
 
 
@@ -934,6 +955,109 @@ async def get_returns_for_order(
         .order_by(OrderReturn.created_at.desc())
     )
     return result.scalars().all()
+
+
+# ── Order hierarchy ────────────────────────────────────────────────────────────
+
+async def get_order_hierarchy(db: AsyncSession, order_id: uuid.UUID) -> Optional[dict]:
+    """
+    Returns the full order tree rooted at the top-most ancestor of order_id.
+
+    Walks up parent_order_id to find the root (cycle-safe), then BFS downward
+    to collect every descendant. Builds a recursive tree with depth markers.
+
+    Example for A → B → C chain queried with any of A/B/C id:
+      {
+        "rootOrderId": "<A.id>",
+        "requestedOrderId": "<C.id>",
+        "totalOrders": 3,
+        "totalItems": 5,
+        "totalAmount": 12500.00,
+        "tree": {
+            ...A serialized..., "depth": 0, "isRoot": true,
+            "children": [
+              { ...B..., "depth": 1, "children": [
+                  { ...C..., "depth": 2, "children": [] }
+              ]}
+            ]
+        }
+      }
+    """
+    # 1. Verify starting order exists
+    start = (await db.execute(
+        select(Order.id).where(
+            Order.id == order_id, Order.is_deleted == False  # noqa
+        )
+    )).scalar_one_or_none()
+    if not start:
+        return None
+
+    # 2. Walk up to find root (cycle-safe)
+    root_id = order_id
+    current_id = order_id
+    visited: set[uuid.UUID] = set()
+    while True:
+        if current_id in visited:
+            break  # cycle guard — root_id holds last safe value
+        visited.add(current_id)
+        root_id = current_id
+        parent_id = (await db.execute(
+            select(Order.parent_order_id).where(Order.id == current_id)
+        )).scalar_one_or_none()
+        if not parent_id:
+            break
+        current_id = parent_id
+
+    # 3. BFS downward from root to collect every order in the chain
+    all_orders: dict[uuid.UUID, Order] = {}
+    queue: List[uuid.UUID] = [root_id]
+    while queue:
+        oid = queue.pop(0)
+        if oid in all_orders:
+            continue
+        order_obj = await get_order_by_id(db, oid)
+        if not order_obj:
+            continue
+        all_orders[oid] = order_obj
+        child_ids = (await db.execute(
+            select(Order.id).where(
+                Order.parent_order_id == oid,
+                Order.is_deleted == False,  # noqa
+            )
+        )).scalars().all()
+        queue.extend(child_ids)
+
+    # 4. Build recursive tree
+    def _build_node(oid: uuid.UUID, depth: int) -> dict:
+        o = all_orders[oid]
+        node = serialize_order_list(o)
+        node["depth"] = depth
+        node["isRoot"] = depth == 0
+        node["children"] = [
+            _build_node(child_id, depth + 1)
+            for child_id, child_o in all_orders.items()
+            if child_o.parent_order_id == oid
+        ]
+        return node
+
+    tree = _build_node(root_id, 0)
+
+    # 5. Aggregate totals across the whole chain
+    total_items = sum(len(o.items) for o in all_orders.values())
+    total_amount = sum(float(o.total_amount) for o in all_orders.values())
+    total_subtotal = sum(float(o.subtotal) for o in all_orders.values())
+    total_discount = sum(float(o.discount_amount) for o in all_orders.values())
+
+    return {
+        "rootOrderId": str(root_id),
+        "requestedOrderId": str(order_id),
+        "totalOrders": len(all_orders),
+        "totalItems": total_items,
+        "totalSubtotal": round(total_subtotal, 2),
+        "totalDiscount": round(total_discount, 2),
+        "totalAmount": round(total_amount, 2),
+        "tree": tree,
+    }
 
 
 # ── Serialization ──────────────────────────────────────────────────────────────
