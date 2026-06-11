@@ -912,31 +912,31 @@ async def get_stock_report_data(
     result = await db.execute(query)
     variants = result.scalars().all()
 
-    # group variants by product
     grouped: dict[str, dict] = {}
     for v in variants:
         name = v.product.name if v.product else ""
-        g = grouped.setdefault(name, {"individual": [], "bundle": []})
+        g = grouped.setdefault(name, {"bundle": {}, "individual": []})
 
         stock = v.stock
         if not stock:
             continue
 
-        # individual -> SKU:count (only if there's any)
+        # individual -> SKU:count  (per variant, no dedup)
         if stock.individual_count:
             g["individual"].append(f"{v.sku or '-'}:{stock.individual_count}")
 
-        # bundle -> settype:count
+        # bundle -> dedup by set type name
         for bs in stock.bundle_stocks or []:
             set_name = bs.set_type.name if bs.set_type else "Unknown"
-            g["bundle"].append(f"{set_name}:{bs.bundle_count}")
+            g["bundle"][set_name] = bs.bundle_count  # last one wins, but all are equal
 
     rows = []
     for i, (name, g) in enumerate(grouped.items(), start=1):
+        bundle_str = ", ".join(f"{k}:{v}" for k, v in g["bundle"].items())
         rows.append({
             "Sl": i,
             "Product": name,
-            "Bundle Stock": ", ".join(g["bundle"]),
+            "Bundle Stock": bundle_str,
             "Individual Stock": ", ".join(g["individual"]),
         })
     return rows
