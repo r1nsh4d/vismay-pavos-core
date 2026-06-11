@@ -815,7 +815,8 @@ async def get_order_report_data(
             selectinload(Order.items).selectinload(OrderItem.product),
             selectinload(Order.items).selectinload(OrderItem.set_type),
             selectinload(Order.items).selectinload(OrderItem.variant),
-            selectinload(Order.shop),
+            selectinload(Order.shop).selectinload(Shop.district),
+            selectinload(Order.shop).selectinload(Shop.taluk),
             selectinload(Order.executive),
             selectinload(Order.distributor),
             selectinload(Order.tenant),
@@ -851,33 +852,49 @@ async def get_order_report_data(
 
     rows = []
     for o in orders:
+        # collapse all items into one summary cell
+        item_parts = []
+        total_count = 0
         for item in o.items:
-            rows.append({
-                "Order Number": o.order_number,
-                "Date": o.created_at.strftime("%Y-%m-%d"),
-                "Type": o.order_type.value,
-                "Price Type": o.price_type.value,
-                "Status": o.status.value,
-                "Tenant": o.tenant.name if o.tenant else "",
-                "Shop": o.shop.name if o.shop else "",
-                "Executive": f"{o.executive.first_name} {o.executive.last_name}".strip() if o.executive else "",
-                "Distributor": f"{o.distributor.first_name} {o.distributor.last_name}".strip() if o.distributor else "",
-                "Product": item.product.name if item.product else "",
-                "Variant Size": item.variant.size if item.variant else "",
-                "Variant Color": item.variant.color if item.variant else "",
-                "Set Type": item.set_type.name if item.set_type else "",
-                "Count": item.count,
-                "Unit Price": float(item.unit_price),
-                "Total Price": float(item.total_price),
-                "Subtotal": float(o.subtotal),
-                "Discount %": float(o.discount_percent),
-                "Discount Flat": float(o.discount_flat),
-                "Discount Amount": float(o.discount_amount),
-                "Total Amount": float(o.total_amount),
-                "Stock Deducted": "Yes" if o.stock_deducted else "No",
-                "Placed At": o.placed_at.strftime("%Y-%m-%d %H:%M") if o.placed_at else "",
-                "Delivered At": o.delivered_at.strftime("%Y-%m-%d %H:%M") if o.delivered_at else "",
-            })
+            name = item.product.name if item.product else "?"
+            set_name = item.set_type.name if item.set_type else ""
+            size = item.variant.size if item.variant else ""
+            color = item.variant.color if item.variant else ""
+
+            attrs = ", ".join(p for p in (size, color, set_name) if p)
+            # use non-breaking spaces (\u00a0) so one product stays on one line
+            if attrs:
+                label = f"{total_count + 1}. {name}\u00a0({attrs})"
+            else:
+                label = name
+            if item.count and item.count > 1:
+                label = f"{label}\u00a0x{item.count}"
+            else:
+                label = f"{label}\u00a0x{item.count}"
+
+            item_parts.append(label)
+            total_count += item.count or 0
+
+        products_summary = "<br/>".join(item_parts)
+
+        rows.append({
+            "Order Number": o.order_number,
+            "Date": o.created_at.strftime("%Y-%m-%d"),
+            "Type": o.order_type.value,
+            "Price Type": o.price_type.value,
+            "Status": o.status.value,
+            "Tenant": o.tenant.name if o.tenant else "",
+            "Shop": o.shop.name if o.shop else "",
+            "District": o.shop.district.name if (o.shop and o.shop.district) else "",
+            "Taluk": o.shop.taluk.name if (o.shop and o.shop.taluk) else "",
+            "Executive": f"{o.executive.first_name} {o.executive.last_name}".strip() if o.executive else "",
+            "Distributor": f"{o.distributor.first_name} {o.distributor.last_name}".strip() if o.distributor else "",
+            "Products": products_summary,
+            "Total Items": total_count,
+            "Total Amount": float(o.total_amount),
+            "Placed At": o.placed_at.strftime("%Y-%m-%d %H:%M") if o.placed_at else "",
+            "Delivered At": o.delivered_at.strftime("%Y-%m-%d %H:%M") if o.delivered_at else "",
+        })
     return rows
 
 
