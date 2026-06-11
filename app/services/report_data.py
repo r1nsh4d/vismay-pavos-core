@@ -923,7 +923,7 @@ async def get_stock_report_data(
 
         # individual -> SKU:count  (per variant, no dedup)
         if stock.individual_count:
-            g["individual"].append(f"{v.sku or '-'}:{stock.individual_count}")
+            g["individual"].append(f"{v.sku or '-'}         ::{stock.individual_count}")
 
         # bundle -> dedup by set type name
         for bs in stock.bundle_stocks or []:
@@ -932,8 +932,8 @@ async def get_stock_report_data(
 
     rows = []
     for i, (name, g) in enumerate(grouped.items(), start=1):
-        bundle_str = ",\n".join(f"{k}:{v}" for k, v in g["bundle"].items())
-        individual_str = ",\n".join(g["individual"])
+        bundle_str = ",<br/>".join(f"{k}        ::{v}" for k, v in g["bundle"].items())
+        individual_str = ",<br/>".join(g["individual"])
         rows.append({
             "Sl": i,
             "Product": name,
