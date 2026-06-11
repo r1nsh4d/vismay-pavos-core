@@ -932,12 +932,13 @@ async def get_stock_report_data(
 
     rows = []
     for i, (name, g) in enumerate(grouped.items(), start=1):
-        bundle_str = ", ".join(f"{k}:{v}" for k, v in g["bundle"].items())
+        bundle_str = ",\n".join(f"{k}:{v}" for k, v in g["bundle"].items())
+        individual_str = ",\n".join(g["individual"])
         rows.append({
             "Sl": i,
             "Product": name,
             "Bundle Stock": bundle_str,
-            "Individual Stock": ", ".join(g["individual"]),
+            "Individual Stock": individual_str,
         })
     return rows
 
