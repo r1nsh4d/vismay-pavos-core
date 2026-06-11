@@ -912,26 +912,32 @@ async def get_stock_report_data(
     result = await db.execute(query)
     variants = result.scalars().all()
 
-    rows = []
+    # group variants by product
+    grouped: dict[str, dict] = {}
     for v in variants:
-        stock = v.stock
-        bundle_summary = ""
-        if stock and stock.bundle_stocks:
-            parts = [
-                f"{bs.set_type.name if bs.set_type else 'Unknown'}:{bs.bundle_count}"
-                for bs in stock.bundle_stocks
-            ]
-            bundle_summary = ", ".join(parts)
+        name = v.product.name if v.product else ""
+        g = grouped.setdefault(name, {"individual": [], "bundle": []})
 
+        stock = v.stock
+        if not stock:
+            continue
+
+        # individual -> SKU:count (only if there's any)
+        if stock.individual_count:
+            g["individual"].append(f"{v.sku or '-'}:{stock.individual_count}")
+
+        # bundle -> settype:count
+        for bs in stock.bundle_stocks or []:
+            set_name = bs.set_type.name if bs.set_type else "Unknown"
+            g["bundle"].append(f"{set_name}:{bs.bundle_count}")
+
+    rows = []
+    for i, (name, g) in enumerate(grouped.items(), start=1):
         rows.append({
-            "Product": v.product.name if v.product else "",
-            "SKU": v.sku or "",
-            "Color": v.color or "",
-            "Pattern": v.pattern or "",
-            "Size": v.size or "",
-            "Individual Stock": stock.individual_count if stock else 0,
-            "Bundle Stocks": bundle_summary,
-            "Status": "Active" if v.is_active else "Inactive",
+            "Sl": i,
+            "Product": name,
+            "Bundle Stock": ", ".join(g["bundle"]),
+            "Individual Stock": ", ".join(g["individual"]),
         })
     return rows
 
