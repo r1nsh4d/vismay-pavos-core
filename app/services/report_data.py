@@ -18,6 +18,7 @@ from app.models.set_type import SetType
 from app.models.category import Category
 from app.models.role import Role
 from app.models.tenant import Tenant
+from app.services.orders import _distributor_name
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -875,7 +876,7 @@ async def get_order_report_data(
             item_parts.append(label)
             total_count += item.count or 0
 
-        products_summary = "<br/>".join(item_parts)
+        products_summary = "\n".join(item_parts)
 
         rows.append({
             "Order Number": o.order_number,
@@ -888,7 +889,7 @@ async def get_order_report_data(
             "District": o.shop.district.name if (o.shop and o.shop.district) else "",
             "Taluk": o.shop.taluk.name if (o.shop and o.shop.taluk) else "",
             "Executive": f"{o.executive.first_name} {o.executive.last_name}".strip() if o.executive else "",
-            "Distributor": f"{o.distributor.first_name} {o.distributor.last_name}".strip() if o.distributor else "",
+            "Distributor": _distributor_name(o.distributor)if o.distributor else "",
             "Products": products_summary,
             "Total Items": total_count,
             "Total Amount": float(o.total_amount),
@@ -940,7 +941,7 @@ async def get_stock_report_data(
 
         # individual -> SKU:count  (per variant, no dedup)
         if stock.individual_count:
-            g["individual"].append(f"{v.sku or '-'}         ::{stock.individual_count}")
+            g["individual"].append(f"{v.sku or '-'} x {stock.individual_count}")
 
         # bundle -> dedup by set type name
         for bs in stock.bundle_stocks or []:
@@ -949,8 +950,8 @@ async def get_stock_report_data(
 
     rows = []
     for i, (name, g) in enumerate(grouped.items(), start=1):
-        bundle_str = ",<br/>".join(f"{k}        ::{v}" for k, v in g["bundle"].items())
-        individual_str = ",<br/>".join(g["individual"])
+        bundle_str = "\n".join(f"{k} x {v}" for k, v in g["bundle"].items())
+        individual_str = "\n".join(g["individual"])
         rows.append({
             "Sl": i,
             "Product": name,

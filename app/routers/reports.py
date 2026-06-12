@@ -247,8 +247,18 @@ async def orders_pdf(
         status=status,
         order_type=order_type,
     )
-    return pdf_response(generate_pdf(rows, "Orders Report"), f"orders_{_now_str()}")
+    ORDER_COL_WEIGHTS = {
+        "Order Number": 1.5, "Date": 1, "Type": 0.8, "Price Type": 0.6,
+        "Status": 1, "Tenant": 1.0, "Shop": 1.7, "District": 1.2, "Taluk": 1.2,
+        "Executive": 1.5, "Distributor": 1.5, "Products": 2,
+        "Total Items": 0.55, "Total Amount": 0.8, "Placed At": 1, "Delivered At": 1,
+    }
 
+    # in orders_pdf:
+    return pdf_response(
+        generate_pdf(rows, "Orders Report", col_weights=ORDER_COL_WEIGHTS),
+        f"orders_{_now_str()}",
+    )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STOCK REPORTS

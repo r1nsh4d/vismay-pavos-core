@@ -56,13 +56,19 @@ def generate_excel(rows: list[dict], sheet_name: str = "Report") -> bytes:
             if value is None:
                 value = ""
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
-            cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=False)
+            cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
             cell.border = thin_border
             cell.fill = fill
 
     # Auto column width
     for col in ws.columns:
-        max_length = max((len(str(cell.value or "")) for cell in col), default=10)
+        max_length = max(
+            (
+                max((len(line) for line in str(cell.value or "").split("\n")), default=0)
+                for cell in col
+            ),
+            default=10,
+        )
         ws.column_dimensions[col[0].column_letter].width = min(max_length + 4, 45)
 
     # Row height for header
@@ -84,7 +90,9 @@ def generate_excel(rows: list[dict], sheet_name: str = "Report") -> bytes:
 
 # ── PDF ────────────────────────────────────────────────────────────────────────
 
-def generate_pdf(rows: list[dict], title: str = "Report") -> bytes:
+def generate_pdf(
+        rows: list[dict], title: str = "Report", col_weights: dict[str, float] | None = None,
+) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,
@@ -127,21 +135,22 @@ def generate_pdf(rows: list[dict], title: str = "Report") -> bytes:
 
     headers = list(rows[0].keys())
     page_width = landscape(A4)[0] - 2 * cm
-    col_width = page_width / len(headers)
 
-    # Wrap cell text using Paragraph for long content
+    if col_weights:
+        w = [col_weights.get(h, 1.0) for h in headers]
+        total_w = sum(w)
+        col_widths = [page_width * x / total_w for x in w]
+    else:
+        col_widths = [page_width / len(headers)] * len(headers)
+
     table_data = [[Paragraph(f"<b>{h}</b>", cell_style) for h in headers]]
     for row in rows:
         table_data.append([
-            Paragraph(str(row.get(h, "") or ""), cell_style)
+            Paragraph(str(row.get(h, "") or "").replace("\n", "<br/>"), cell_style)
             for h in headers
         ])
 
-    table = Table(
-        table_data,
-        colWidths=[col_width] * len(headers),
-        repeatRows=1,
-    )
+    table = Table(table_data, colWidths=col_widths, repeatRows=1)
 
     table.setStyle(TableStyle([
         # Header background
