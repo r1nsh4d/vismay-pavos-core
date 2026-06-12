@@ -856,6 +856,7 @@ async def get_order_report_data(
         # collapse all items into one summary cell
         item_parts = []
         total_count = 0
+        index = 1
         for item in o.items:
             name = item.product.name if item.product else "?"
             set_name = item.set_type.name if item.set_type else ""
@@ -865,7 +866,7 @@ async def get_order_report_data(
             attrs = ", ".join(p for p in (size, color, set_name) if p)
             # use non-breaking spaces (\u00a0) so one product stays on one line
             if attrs:
-                label = f"{total_count + 1}. {name}\u00a0({attrs})"
+                label = f"{index}. {name}\u00a0({attrs})"
             else:
                 label = name
             if item.count and item.count > 1:
@@ -875,6 +876,7 @@ async def get_order_report_data(
 
             item_parts.append(label)
             total_count += item.count or 0
+            index += 1
 
         products_summary = "\n".join(item_parts)
 
