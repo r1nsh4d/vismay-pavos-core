@@ -24,6 +24,7 @@ router = APIRouter(prefix="/orders", tags=["Orders"])
 
 @router.get("/search", response_model=CommonResponse)
 async def search_orders(
+    q: str| None = None,
     tenant_id: uuid.UUID | None = None,
     shop_id: uuid.UUID | None = None,
     distributor_id: uuid.UUID | None = None,
@@ -45,7 +46,7 @@ async def search_orders(
         status=status, order_type=order_type,
         parent_only=parent_only,
         date_from=date_from, date_to=date_to,
-        page=page, limit=limit,
+        search=q, page=page, limit=limit,
     )
     return PaginatedResponse(
         data=[order_svc.serialize_order_list(o) for o in orders],

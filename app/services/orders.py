@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, date, timezone
 from typing import Optional, List, Tuple
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -131,6 +131,7 @@ async def get_order_by_id(db: AsyncSession, order_id: uuid.UUID) -> Optional[Ord
 
 async def search_orders(
     db: AsyncSession,
+    search: Optional[str] = None,
     tenant_id: Optional[uuid.UUID] = None,
     shop_id: Optional[uuid.UUID] = None,
     distributor_id: Optional[uuid.UUID] = None,
@@ -163,6 +164,12 @@ async def search_orders(
         filters.append(Order.created_at >= datetime.combine(date_from, datetime.min.time()))
     if date_to:
         filters.append(Order.created_at <= datetime.combine(date_to, datetime.max.time()))
+    if search:
+        term = f"%{search.strip()}%"
+        filters.append(or_(
+            Order.order_number.ilike(term),
+            Order.notes.ilike(term),
+        ))
 
     total = (await db.execute(
         select(func.count(Order.id)).where(*filters)
@@ -345,14 +352,16 @@ async def create_bundle_order(
             raise AppException(status_code=404, detail=f"SetType {item.set_type_id} not found")
 
         unit_price = _get_unit_price(product, data.price_type)
+        set_qty = set_type.total_pieces
+
         oi = OrderItem(
             order_id=order.id,
             product_id=item.product_id,
             set_type_id=item.set_type_id,
             variant_id=None,
-            count=item.count,
+            count=item.count * set_qty,
             unit_price=unit_price,
-            total_price=unit_price * item.count,
+            total_price=unit_price * set_qty * item.count,
         )
         db.add(oi)
         order_items.append(oi)
@@ -1145,7 +1154,7 @@ def serialize_order_list(order: Order) -> dict:
         "totalAmount": float(order.total_amount),
         "notes": order.notes,
         "stockDeducted": order.stock_deducted,
-        "itemCount": len(order.items),
+        "itemCount": sum(i.count for i in order.items),
         "placedAt": _ts(order.placed_at),
         "createdAt": order.created_at.isoformat(),
         "updatedAt": order.updated_at.isoformat(),
@@ -1216,7 +1225,7 @@ def serialize_order(order: Order) -> dict:
                 "notes": co.notes,
                 "stockDeducted": co.stock_deducted,
                 "isChild": co.parent_order_id is not None,
-                "itemCount": len(co.items),
+                "itemCount": sum(i.count for i in co.items),
                 "items": [serialize_order_item(i) for i in co.items],
                 "placedAt": _ts(co.placed_at),
                 "createdAt": co.created_at.isoformat(),
