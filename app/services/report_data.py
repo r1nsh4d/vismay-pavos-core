@@ -18,6 +18,7 @@ from app.models.set_type import SetType
 from app.models.category import Category
 from app.models.role import Role
 from app.models.tenant import Tenant
+from app.services.orders import _distributor_name
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -815,7 +816,8 @@ async def get_order_report_data(
             selectinload(Order.items).selectinload(OrderItem.product),
             selectinload(Order.items).selectinload(OrderItem.set_type),
             selectinload(Order.items).selectinload(OrderItem.variant),
-            selectinload(Order.shop),
+            selectinload(Order.shop).selectinload(Shop.district),
+            selectinload(Order.shop).selectinload(Shop.taluk),
             selectinload(Order.executive),
             selectinload(Order.distributor),
             selectinload(Order.tenant),
@@ -851,33 +853,51 @@ async def get_order_report_data(
 
     rows = []
     for o in orders:
+        # collapse all items into one summary cell
+        item_parts = []
+        total_count = 0
+        index = 1
         for item in o.items:
-            rows.append({
-                "Order Number": o.order_number,
-                "Date": o.created_at.strftime("%Y-%m-%d"),
-                "Type": o.order_type.value,
-                "Price Type": o.price_type.value,
-                "Status": o.status.value,
-                "Tenant": o.tenant.name if o.tenant else "",
-                "Shop": o.shop.name if o.shop else "",
-                "Executive": f"{o.executive.first_name} {o.executive.last_name}".strip() if o.executive else "",
-                "Distributor": f"{o.distributor.first_name} {o.distributor.last_name}".strip() if o.distributor else "",
-                "Product": item.product.name if item.product else "",
-                "Variant Size": item.variant.size if item.variant else "",
-                "Variant Color": item.variant.color if item.variant else "",
-                "Set Type": item.set_type.name if item.set_type else "",
-                "Count": item.count,
-                "Unit Price": float(item.unit_price),
-                "Total Price": float(item.total_price),
-                "Subtotal": float(o.subtotal),
-                "Discount %": float(o.discount_percent),
-                "Discount Flat": float(o.discount_flat),
-                "Discount Amount": float(o.discount_amount),
-                "Total Amount": float(o.total_amount),
-                "Stock Deducted": "Yes" if o.stock_deducted else "No",
-                "Placed At": o.placed_at.strftime("%Y-%m-%d %H:%M") if o.placed_at else "",
-                "Delivered At": o.delivered_at.strftime("%Y-%m-%d %H:%M") if o.delivered_at else "",
-            })
+            name = item.product.name if item.product else "?"
+            set_name = item.set_type.name if item.set_type else ""
+            size = item.variant.size if item.variant else ""
+            color = item.variant.color if item.variant else ""
+
+            attrs = ", ".join(p for p in (size, color, set_name) if p)
+            # use non-breaking spaces (\u00a0) so one product stays on one line
+            if attrs:
+                label = f"{index}. {name}\u00a0({attrs})"
+            else:
+                label = name
+            if item.count and item.count > 1:
+                label = f"{label}\u00a0x{item.count}"
+            else:
+                label = f"{label}\u00a0x{item.count}"
+
+            item_parts.append(label)
+            total_count += item.count or 0
+            index += 1
+
+        products_summary = "\n".join(item_parts)
+
+        rows.append({
+            "Order Number": o.order_number,
+            "Date": o.created_at.strftime("%Y-%m-%d"),
+            "Type": o.order_type.value,
+            "Price Type": o.price_type.value,
+            "Status": o.status.value,
+            "Tenant": o.tenant.name if o.tenant else "",
+            "Shop": o.shop.name if o.shop else "",
+            "District": o.shop.district.name if (o.shop and o.shop.district) else "",
+            "Taluk": o.shop.taluk.name if (o.shop and o.shop.taluk) else "",
+            "Executive": f"{o.executive.first_name} {o.executive.last_name}".strip() if o.executive else "",
+            "Distributor": _distributor_name(o.distributor)if o.distributor else "",
+            "Products": products_summary,
+            "Total Items": total_count,
+            "Total Amount": float(o.total_amount),
+            "Placed At": o.placed_at.strftime("%Y-%m-%d %H:%M") if o.placed_at else "",
+            "Delivered At": o.delivered_at.strftime("%Y-%m-%d %H:%M") if o.delivered_at else "",
+        })
     return rows
 
 
@@ -912,26 +932,33 @@ async def get_stock_report_data(
     result = await db.execute(query)
     variants = result.scalars().all()
 
-    rows = []
+    grouped: dict[str, dict] = {}
     for v in variants:
-        stock = v.stock
-        bundle_summary = ""
-        if stock and stock.bundle_stocks:
-            parts = [
-                f"{bs.set_type.name if bs.set_type else 'Unknown'}:{bs.bundle_count}"
-                for bs in stock.bundle_stocks
-            ]
-            bundle_summary = ", ".join(parts)
+        name = v.product.name if v.product else ""
+        g = grouped.setdefault(name, {"bundle": {}, "individual": []})
 
+        stock = v.stock
+        if not stock:
+            continue
+
+        # individual -> SKU:count  (per variant, no dedup)
+        if stock.individual_count:
+            g["individual"].append(f"{v.sku or '-'} x {stock.individual_count}")
+
+        # bundle -> dedup by set type name
+        for bs in stock.bundle_stocks or []:
+            set_name = bs.set_type.name if bs.set_type else "Unknown"
+            g["bundle"][set_name] = bs.bundle_count  # last one wins, but all are equal
+
+    rows = []
+    for i, (name, g) in enumerate(grouped.items(), start=1):
+        bundle_str = "\n".join(f"{k} x {v}" for k, v in g["bundle"].items())
+        individual_str = "\n".join(g["individual"])
         rows.append({
-            "Product": v.product.name if v.product else "",
-            "SKU": v.sku or "",
-            "Color": v.color or "",
-            "Pattern": v.pattern or "",
-            "Size": v.size or "",
-            "Individual Stock": stock.individual_count if stock else 0,
-            "Bundle Stocks": bundle_summary,
-            "Status": "Active" if v.is_active else "Inactive",
+            "Sl": i,
+            "Product": name,
+            "Bundle Stock": bundle_str,
+            "Individual Stock": individual_str,
         })
     return rows
 
