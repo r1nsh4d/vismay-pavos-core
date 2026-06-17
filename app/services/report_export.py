@@ -1,13 +1,17 @@
 import io
-from datetime import datetime
+from datetime import datetime, timezone
+
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+from reportlab.lib.units import cm, mm
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.units import cm
-from reportlab.lib.enums import TA_CENTER
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from reportlab.lib.enums import TA_RIGHT, TA_LEFT, TA_CENTER
+from reportlab.platypus import (
+    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable,
+)
 
 
 # ── Excel ──────────────────────────────────────────────────────────────────────
@@ -195,4 +199,185 @@ def generate_pdf(
         canvas.restoreState()
 
     doc.build(elements, onFirstPage=add_page_number, onLaterPages=add_page_number)
+    return buf.getvalue()
+
+
+INK = colors.HexColor("#1f2933")
+SUBTLE = colors.HexColor("#52606d")
+MUTED = colors.HexColor("#9aa5b1")
+LINE = colors.HexColor("#e4e7eb")
+ZEBRA = colors.HexColor("#f7f9fb")
+
+
+def _money(v):
+    try:
+        return f"{float(v or 0):,.2f}"
+    except (TypeError, ValueError):
+        return "0.00"
+
+
+def _date(iso, fmt="%d %b %Y"):
+    if not iso:
+        return "-"
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(
+            timezone.utc).strftime(fmt)
+    except Exception:
+        return str(iso)
+
+
+def _styles():
+    ss = getSampleStyleSheet()
+    return {
+        "brand": ParagraphStyle("brand", parent=ss["Normal"], fontName="Helvetica-Bold",
+                                fontSize=18, textColor=INK, leading=22),
+        "brand_sub": ParagraphStyle("brand_sub", parent=ss["Normal"], fontSize=8,
+                                    textColor=MUTED, leading=11),
+        "doc_title": ParagraphStyle("doc_title", parent=ss["Normal"], fontName="Helvetica-Bold",
+                                    fontSize=20, textColor=INK, alignment=TA_RIGHT, leading=24),
+        "meta": ParagraphStyle("meta", parent=ss["Normal"], fontSize=8.5, textColor=SUBTLE,
+                                alignment=TA_RIGHT, leading=13),
+        "lbl": ParagraphStyle("lbl", parent=ss["Normal"], fontSize=7.5, textColor=MUTED,
+                              leading=12, spaceAfter=3),
+        "name": ParagraphStyle("name", parent=ss["Normal"], fontName="Helvetica-Bold",
+                               fontSize=10, textColor=INK, leading=14),
+        "line": ParagraphStyle("line", parent=ss["Normal"], fontSize=9, textColor=SUBTLE,
+                               leading=13),
+        "th": ParagraphStyle("th", parent=ss["Normal"], fontName="Helvetica-Bold", fontSize=8,
+                             textColor=colors.white, leading=10),
+        "th_r": ParagraphStyle("th_r", parent=ss["Normal"], fontName="Helvetica-Bold", fontSize=8,
+                               textColor=colors.white, leading=10, alignment=TA_RIGHT),
+        "cell": ParagraphStyle("cell", parent=ss["Normal"], fontSize=9, textColor=INK, leading=12),
+        "cell_meta": ParagraphStyle("cell_meta", parent=ss["Normal"], fontSize=7.5,
+                                    textColor=MUTED, leading=10),
+        "cell_r": ParagraphStyle("cell_r", parent=ss["Normal"], fontSize=9, textColor=INK,
+                                 leading=12, alignment=TA_RIGHT),
+        "foot": ParagraphStyle("foot", parent=ss["Normal"], fontSize=7.5, textColor=MUTED,
+                               alignment=TA_LEFT, leading=11),
+    }
+
+
+def build_invoice_pdf(order: dict) -> bytes:
+    s = _styles()
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=16 * mm, rightMargin=16 * mm, topMargin=16 * mm, bottomMargin=16 * mm,
+        title=f"Invoice {order.get('orderNumber', '')}",
+    )
+    avail = doc.width
+    story = []
+
+    # ── Header: brand left, INVOICE + meta right ──
+    ts = order.get("statusTimestamps") or {}
+    meta = (
+        f"<b>{order.get('orderNumber','')}</b><br/>"
+        f"Invoice date: {_date(ts.get('billedAt') or order.get('createdAt'))}<br/>"
+        f"Order date: {_date(order.get('createdAt'))}<br/>"
+        f"Status: {str(order.get('status','')).upper()}"
+    )
+    brand_cell = [
+        Paragraph(order.get("tenantName") or "Invoice", s["brand"]),
+        Paragraph(f"Distributed via {order.get('distributorName') or '-'}", s["brand_sub"]),
+    ]
+    head = Table([[brand_cell,
+                   [Paragraph("INVOICE", s["doc_title"]), Spacer(1, 4), Paragraph(meta, s["meta"])]]],
+                 colWidths=[avail * 0.55, avail * 0.45])
+    head.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                              ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                              ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    story += [head, Spacer(1, 8),
+              HRFlowable(width="100%", thickness=1.4, color=INK, spaceAfter=14)]
+
+    # ── Parties: billed-to / from ──
+    addr = order.get("shopAddress") or {}
+    addr_line = ", ".join(p for p in [addr.get("city"), addr.get("state_name"),
+                                      addr.get("pincode")] if p)
+    billed = [
+        Paragraph("BILLED TO", s["lbl"]),
+        Paragraph(order.get("shopName") or "-", s["name"]),
+        Paragraph("<br/>".join(filter(None, [addr.get("line1"), addr.get("line2"), addr_line])),
+                  s["line"]),
+        Paragraph(f"Contact: {order.get('shopContactPerson') or '-'} &middot; "
+                  f"{order.get('shopPhone') or '-'}", s["line"]),
+    ]
+    frm = [
+        Paragraph("FROM / DISTRIBUTOR", s["lbl"]),
+        Paragraph(order.get("distributorName") or "-", s["name"]),
+        Paragraph(order.get("distributorPhone") or "-", s["line"]),
+        Paragraph(f"Executive: {order.get('assignedExecutiveName') or '-'}", s["line"]),
+    ]
+    parties = Table([[billed, frm]], colWidths=[avail * 0.55, avail * 0.45])
+    parties.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                                ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    story += [parties, Spacer(1, 18)]
+
+    # ── Line items ──
+    header = [Paragraph("#", s["th"]), Paragraph("ITEM", s["th"]),
+              Paragraph("QTY", s["th_r"]), Paragraph("UNIT PRICE", s["th_r"]),
+              Paragraph("AMOUNT", s["th_r"])]
+    rows = [header]
+    for i, it in enumerate(order.get("items", []), start=1):
+        name_cell = [Paragraph(str(it.get("productName") or "-"), s["cell"])]
+        if it.get("setTypeName"):
+            name_cell.append(Paragraph(str(it["setTypeName"]), s["cell_meta"]))
+        rows.append([
+            Paragraph(str(i), s["cell"]), name_cell,
+            Paragraph(str(it.get("count", 0)), s["cell_r"]),
+            Paragraph(_money(it.get("unitPrice")), s["cell_r"]),
+            Paragraph(_money(it.get("totalPrice")), s["cell_r"]),
+        ])
+    cw = [avail * 0.06, avail * 0.50, avail * 0.10, avail * 0.16, avail * 0.18]
+    items = Table(rows, colWidths=cw, repeatRows=1)
+    st = [
+        ("BACKGROUND", (0, 0), (-1, 0), INK),
+        ("TOPPADDING", (0, 0), (-1, 0), 7), ("BOTTOMPADDING", (0, 0), (-1, 0), 7),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 1), (-1, -1), 7), ("BOTTOMPADDING", (0, 1), (-1, -1), 7),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LINEBELOW", (0, 1), (-1, -1), 0.5, LINE),
+    ]
+    for r in range(2, len(rows), 2):
+        st.append(("BACKGROUND", (0, r), (-1, r), ZEBRA))
+    items.setStyle(TableStyle(st))
+    story += [items, Spacer(1, 14)]
+
+    # ── Totals (right aligned block) ──
+    disc_lbl = "Discount"
+    if order.get("discountPercent"):
+        disc_lbl = f"Discount ({order.get('discountPercent')}%)"
+    tot_rows = [
+        [Paragraph("Subtotal", s["line"]), Paragraph(_money(order.get("subtotal")), s["cell_r"])],
+        [Paragraph(disc_lbl, s["line"]),
+         Paragraph(f"- {_money(order.get('discountAmount'))}", s["cell_r"])],
+        [Paragraph("<b>Total</b>", ParagraphStyle("g", parent=s["line"], fontSize=12,
+                                                  textColor=INK)),
+         Paragraph(f"<b>INR {_money(order.get('totalAmount'))}</b>",
+                   ParagraphStyle("gr", parent=s["cell_r"], fontSize=12))],
+    ]
+    totals = Table(tot_rows, colWidths=[avail * 0.22, avail * 0.20])
+    totals.setStyle(TableStyle([
+        ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LINEABOVE", (0, 2), (-1, 2), 1.4, INK), ("TOPPADDING", (0, 2), (-1, 2), 9),
+    ]))
+    wrap = Table([[totals]], colWidths=[avail])
+    wrap.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+                             ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                             ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    story.append(wrap)
+
+    # ── Notes ──
+    if (order.get("notes") or "").strip():
+        story += [Spacer(1, 18),
+                  Paragraph("NOTES", s["lbl"]),
+                  Paragraph(order["notes"].strip(), s["line"])]
+
+    # ── Footer ──
+    story += [Spacer(1, 28),
+              HRFlowable(width="100%", thickness=0.5, color=LINE, spaceAfter=8),
+              Paragraph(f"System-generated invoice for {order.get('orderNumber','')}. "
+                        f"No signature required.", s["foot"])]
+
+    doc.build(story)
     return buf.getvalue()
