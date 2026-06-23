@@ -45,6 +45,11 @@ class OrderNoteUpdate(CamelModel):
     notes: Optional[str] = None
 
 
+class OrderBillUpdate(CamelModel):
+    bill_number: Optional[str] = None
+    notes: Optional[str] = None
+
+
 class OrderAssignDistributorInput(CamelModel):
     distributor_id: uuid.UUID
     notes: Optional[str] = None

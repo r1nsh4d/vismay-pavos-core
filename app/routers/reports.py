@@ -685,3 +685,27 @@ async def returns_pdf(
         product_id=product_id,
     )
     return pdf_response(generate_pdf(rows, "Returns Report"), f"returns_{_now_str()}")
+
+
+@router.get("/executives/sales/excel")
+async def executive_sales_excel(
+    tenant_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rows = await rd.get_executive_sales_summary(db, date_from=date_from, date_to=date_to, tenant_id=tenant_id)
+    return excel_response(generate_excel(rows, "Executive Sales"), f"executive_sales_{_now_str()}")
+
+
+@router.get("/districts/categories/excel")
+async def district_category_excel(
+    tenant_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rows = await rd.get_district_category_report(db, date_from=date_from, date_to=date_to, tenant_id=tenant_id)
+    return excel_response(generate_excel(rows, "District Categories"), f"district_categories_{_now_str()}")

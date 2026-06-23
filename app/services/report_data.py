@@ -826,7 +826,7 @@ async def get_order_report_data(
         select(Order)
         .where(Order.is_deleted == False, Order.parent_order_id == None)  # noqa
         .options(
-            selectinload(Order.items).selectinload(OrderItem.product),
+            selectinload(Order.items).selectinload(OrderItem.product).selectinload(Product.category),
             selectinload(Order.items).selectinload(OrderItem.set_type),
             selectinload(Order.items).selectinload(OrderItem.variant),
             selectinload(Order.shop).selectinload(Shop.district),
@@ -866,37 +866,15 @@ async def get_order_report_data(
 
     rows = []
     for o in orders:
-        item_parts = []
-        total_count = 0
-        index = 1
-        price_label = o.price_type.value.upper()  # "MRP" or "DP"
-        for item in o.items:
-            name = item.product.name if item.product else "?"
-            set_name = item.set_type.name if item.set_type else ""
-            size = item.variant.size if item.variant else ""
-            color = item.variant.color if item.variant else ""
-
-            attrs = ", ".join(p for p in (size, color, set_name) if p)
-            label = f"{index}. {name}"
-            if attrs:
-                label += f"\u00a0({attrs})"
-
-            count = item.count or 0
-            unit_price = float(item.unit_price or 0)
-            # slNo. product (settype) x count x ₹price (MRP/DP)
-            label += f"\u00a0x{count}\u00a0x\u00a0₹{unit_price:g}\u00a0{price_label}"
-
-            item_parts.append(label)
-            total_count += count
-            index += 1
-
-        products_summary = "\n".join(item_parts)
-
-        # Booking date = dispatched_at (booked with transporter at dispatch)
         booking_dt = o.dispatched_at
+        price_label = o.price_type.value.upper()
+        if price_label == "MRP":
+            price_label = "MRP(Net Of Tax)"
 
-        rows.append({
+        # order-level fields, computed once and repeated on each line row
+        order_cols = {
             "Order Number": o.order_number,
+            "Bill Number": o.bill_number or "",
             "Type": o.order_type.value,
             "Price Type": o.price_type.value,
             "Shipment Status": o.status.value,
@@ -906,36 +884,45 @@ async def get_order_report_data(
             "Taluk": o.shop.taluk.name if (o.shop and o.shop.taluk) else "",
             "Executive": f"{o.executive.first_name} {o.executive.last_name}".strip() if o.executive else "",
             "Distributor": _distributor_name(o.distributor) if o.distributor else "",
-            "Products": products_summary,
-            "Total Items": total_count,
-            "Subtotal": float(o.subtotal),
-            "Discount": float(o.discount_amount),
-            "Total Amount": float(o.total_amount),
-            "Discount Detail": (
-                f"{float(o.discount_percent):g}%" if o.discount_percent else
-                (f"₹{float(o.discount_flat):g} flat" if o.discount_flat else "")
-            ),
+            "Order Subtotal": float(o.subtotal),
+            "Order Discount": float(o.discount_amount),
+            "Order Total": float(o.total_amount),
             "Transporter Name": o.delivery_partner or "",
             "Tracking Number": o.tracking_number or "",
             "Boxes Dispatched": o.dispatched_box_count if o.dispatched_box_count is not None else "",
-            # ---- full lifecycle timeline ----
-            "Placed At": _fmt(o.placed_at),
-            "Verified At": _fmt(o.verified_at),
-            "Assigned At": _fmt(o.assigned_at),
-            "Approved At": _fmt(o.approved_at),
-            "Estimated At": _fmt(o.estimated_at),
-            "Billed At": _fmt(o.billed_at),
-            "Packing At": _fmt(o.packing_at),
+            "Delivery Notes": o.delivery_notes or "",
+            "Booking Date": booking_dt.strftime("%Y-%m-%d") if booking_dt else "",
             "Dispatched At": _fmt(o.dispatched_at),
             "Delivered At": _fmt(o.delivered_at),
-            "Cancelled At": _fmt(o.cancelled_at),
-            "Rejected At": _fmt(o.rejected_at),
-            "Returned At": _fmt(o.returned_at),
-            # Booking Date kept as date-only for the transporter view
-            "Booking Date": booking_dt.strftime("%Y-%m-%d") if booking_dt else "",
             "Delivery Date": _fmt(o.delivered_at),
             "TAT (days)": _tat_days(booking_dt, o.delivered_at),
-        })
+        }
+
+        if not o.items:
+            rows.append({**order_cols, "SL": "", "Product": "", "Category": "",
+                         "Set Type": "", "Size": "", "Color": "", "Pieces": 0,
+                         "Unit Price": "", "Price Basis": price_label, "Line Total": 0})
+            continue
+
+        for idx, item in enumerate(o.items, start=1):
+            category = (
+                item.product.category.name
+                if item.product and item.product.category
+                else ""
+            )
+            rows.append({
+                **order_cols,
+                "SL": idx,
+                "Product": item.product.name if item.product else "?",
+                "Category": category,
+                "Set Type": item.set_type.name if item.set_type else "",
+                "Size": item.variant.size if item.variant else "",
+                "Color": item.variant.color if item.variant else "",
+                "Pieces": item.count or 0,
+                "Unit Price": float(item.unit_price or 0),
+                "Price Basis": price_label,
+                "Line Total": float(item.total_price or 0),
+            })
     return rows
 
 
@@ -951,7 +938,7 @@ async def get_stock_report_data(
         select(ProductVariant)
         .where(ProductVariant.is_deleted == False)
         .options(
-            selectinload(ProductVariant.product),
+            selectinload(ProductVariant.product).selectinload(Product.category),
             selectinload(ProductVariant.stock)
             .selectinload(Stock.bundle_stocks)
             .selectinload(BundleStock.set_type),
@@ -967,37 +954,63 @@ async def get_stock_report_data(
     if product_id:
         query = query.where(ProductVariant.product_id == product_id)
 
-    result = await db.execute(query)
-    variants = result.scalars().all()
+    variants = (await db.execute(query)).scalars().all()
 
     grouped: dict[str, dict] = {}
     for v in variants:
         name = v.product.name if v.product else ""
-        g = grouped.setdefault(name, {"bundle": {}, "individual": []})
+        category = (
+            v.product.category.name
+            if v.product and v.product.category
+            else ""
+        )
+        g = grouped.setdefault(name, {"category": category, "bundle": {}, "individual": []})
 
         stock = v.stock
         if not stock:
             continue
 
-        # individual -> SKU:count  (per variant, no dedup)
         if stock.individual_count:
-            g["individual"].append(f"{v.sku or '-'} x {stock.individual_count}")
+            g["individual"].append((v.sku or "-", stock.individual_count))
 
-        # bundle -> dedup by set type name
         for bs in stock.bundle_stocks or []:
             set_name = bs.set_type.name if bs.set_type else "Unknown"
-            g["bundle"][set_name] = bs.bundle_count  # last one wins, but all are equal
+            g["bundle"][set_name] = bs.bundle_count
 
     rows = []
-    for i, (name, g) in enumerate(grouped.items(), start=1):
-        bundle_str = "\n".join(f"{k} x {v}" for k, v in g["bundle"].items())
-        individual_str = "\n".join(g["individual"])
-        rows.append({
-            "Sl": i,
-            "Product": name,
-            "Bundle Stock": bundle_str,
-            "Individual Stock": individual_str,
-        })
+    sl = 1
+    for name, g in grouped.items():
+        cat = g["category"]
+        for set_name, cnt in g["bundle"].items():
+            rows.append({
+                "Sl": sl,
+                "Product": name,
+                "Category": cat,
+                "Stock Type": "Bundle",
+                "Set Type / SKU": set_name,
+                "Count": int(cnt or 0),
+            })
+            sl += 1
+        for sku, cnt in g["individual"]:
+            rows.append({
+                "Sl": sl,
+                "Product": name,
+                "Category": cat,
+                "Stock Type": "Individual",
+                "Set Type / SKU": sku,
+                "Count": int(cnt or 0),
+            })
+            sl += 1
+        if not g["bundle"] and not g["individual"]:
+            rows.append({
+                "Sl": sl,
+                "Product": name,
+                "Category": cat,
+                "Stock Type": "",
+                "Set Type / SKU": "",
+                "Count": 0,
+            })
+            sl += 1
     return rows
 
 
@@ -1668,5 +1681,134 @@ async def get_returns_report_data(
             "Count": r.count,
             "Processed By": f"{r.processor.first_name} {r.processor.last_name}".strip() if r.processor else "",
             "Notes": r.notes or "",
+        })
+    return rows
+
+
+async def get_executive_sales_summary(
+    db: AsyncSession,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    tenant_id: Optional[uuid.UUID] = None,
+) -> list[dict]:
+    excluded = [OrderStatus.rejected, OrderStatus.returned, OrderStatus.cancelled]
+
+    filters = [
+        Order.is_deleted == False,
+        Order.parent_order_id == None,  # noqa
+        Order.status.not_in(excluded),
+    ]
+    if tenant_id:
+        filters.append(Order.tenant_id == tenant_id)
+    if date_from:
+        filters.append(Order.created_at >= datetime.combine(date_from, datetime.min.time()))
+    if date_to:
+        filters.append(Order.created_at <= datetime.combine(date_to, datetime.max.time()))
+
+    # pieces from item join
+    pieces_q = (
+        select(
+            Order.assigned_executive.label("exec_id"),
+            func.coalesce(func.sum(OrderItem.count), 0).label("pieces"),
+        )
+        .join(OrderItem, OrderItem.order_id == Order.id)
+        .where(*filters)
+        .group_by(Order.assigned_executive)
+    )
+
+    # order count + true order value (NO item join -> no fan-out)
+    orders_q = (
+        select(
+            Order.assigned_executive.label("exec_id"),
+            func.count(Order.id).label("order_count"),
+            func.coalesce(func.sum(Order.total_amount), 0).label("order_value"),
+        )
+        .where(*filters)
+        .group_by(Order.assigned_executive)
+    )
+
+    pieces_map = {r.exec_id: int(r.pieces) for r in (await db.execute(pieces_q)).all()}
+    orders_map = {
+        r.exec_id: (int(r.order_count), float(r.order_value))
+        for r in (await db.execute(orders_q)).all()
+    }
+
+    exec_ids = [eid for eid in orders_map if eid is not None]
+    execs: dict[uuid.UUID, User] = {}
+    if exec_ids:
+        eq = (
+            select(User)
+            .where(User.id.in_(exec_ids))
+            .options(selectinload(User.user_districts).selectinload(UserDistrict.district))
+        )
+        execs = {u.id: u for u in (await db.execute(eq)).scalars().unique().all()}
+
+    rows = []
+    for eid, (order_count, order_value) in sorted(
+        orders_map.items(), key=lambda x: x[1][1], reverse=True
+    ):
+        if eid is None:
+            name, districts = "(Unassigned)", ""
+        else:
+            u = execs.get(eid)
+            name = f"{u.first_name} {u.last_name}".strip() if u else str(eid)
+            districts = ", ".join(ud.district.name for ud in u.user_districts if ud.district) if u else ""
+
+        rows.append({
+            "Executive": name,
+            "Districts": districts,
+            "Orders": order_count,
+            "Total Pieces": pieces_map.get(eid, 0),
+            "Total Value (₹)": round(order_value, 2),
+        })
+    return rows
+
+
+async def get_district_category_report(
+    db: AsyncSession,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    tenant_id: Optional[uuid.UUID] = None,
+) -> list[dict]:
+    excluded = [OrderStatus.rejected, OrderStatus.returned, OrderStatus.cancelled]
+
+    filters = [
+        Order.is_deleted == False,
+        Order.parent_order_id == None,  # noqa
+        Order.status.not_in(excluded),
+    ]
+    if tenant_id:
+        filters.append(Order.tenant_id == tenant_id)
+    if date_from:
+        filters.append(Order.created_at >= datetime.combine(date_from, datetime.min.time()))
+    if date_to:
+        filters.append(Order.created_at <= datetime.combine(date_to, datetime.max.time()))
+
+    q = (
+        select(
+            District.name.label("district"),
+            Category.name.label("category"),
+            func.count(func.distinct(Product.id)).label("distinct_products"),
+            func.coalesce(func.sum(OrderItem.count), 0).label("pieces"),
+            func.coalesce(func.sum(OrderItem.total_price), 0).label("value"),
+        )
+        .join(Order, OrderItem.order_id == Order.id)
+        .join(Product, OrderItem.product_id == Product.id)
+        .join(Category, Product.category_id == Category.id)
+        .join(Shop, Order.shop_id == Shop.id)
+        .join(District, Shop.district_id == District.id)
+        .where(*filters)
+        .group_by(District.name, Category.name)
+        .order_by(District.name, Category.name)
+    )
+
+    rows = []
+    for r in (await db.execute(q)).all():
+        rows.append({
+            "District": r.district,
+            "Category": r.category,
+            "Distinct Products": int(r.distinct_products),
+            "Pieces Purchased": int(r.pieces),
+            "Value (₹)": round(float(r.value), 2),
         })
     return rows

@@ -12,7 +12,7 @@ from app.schemas.order import (
     OrderNoteUpdate, OrderDiscountUpdate,
     OrderAssignDistributorInput, OrderDispatchInput,
     SplitOrderInput, CreateOrderReturnInput,
-    UpdateDeliveredAtInput, UpdateOrderItemInput,
+    UpdateDeliveredAtInput, UpdateOrderItemInput, OrderBillUpdate,
 )
 from app.services import orders as order_svc
 from app.models.order import OrderStatus, OrderType, CANCELLABLE_STATUSES
@@ -356,7 +356,7 @@ async def reject_order(
 @router.patch("/{order_id}/bill", response_model=CommonResponse)
 async def bill_order(
     order_id: uuid.UUID,
-    body: OrderNoteUpdate,
+    body: OrderBillUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -365,7 +365,10 @@ async def bill_order(
         return ErrorResponseModel(code=404, message="Order not found", error={})
     if order.status != OrderStatus.estimated:
         return ErrorResponseModel(code=400, message="Only estimated orders can be billed", error={})
-    order = await order_svc.bill_order(db, order, notes=body.notes)
+
+    order = await order_svc.bill_order(
+        db, order, bill_number=body.bill_number, notes=body.notes
+    )
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
     return ResponseModel(data=order_svc.serialize_order(order), message="Order billed")

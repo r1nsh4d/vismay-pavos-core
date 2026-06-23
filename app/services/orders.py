@@ -728,9 +728,12 @@ async def estimate_order(db: AsyncSession, order: Order, notes: Optional[str]) -
     return await get_order_by_id(db, order.id)
 
 
-async def bill_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
+async def bill_order(
+    db: AsyncSession, order: Order, bill_number: Optional[str] = None, notes: Optional[str] = None,) -> Order:
     order.status = OrderStatus.billed
     _stamp(order, OrderStatus.billed)
+    if bill_number:
+        order.bill_number = bill_number
     if notes:
         order.notes = notes
     await db.flush()

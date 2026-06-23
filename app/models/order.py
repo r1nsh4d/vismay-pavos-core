@@ -99,6 +99,7 @@ class Order(BaseModel):
     tracking_link: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     delivery_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     dispatched_box_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    bill_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
 
     # Status timestamps
     placed_at: Mapped[Optional[str]] = mapped_column(DateTime(timezone=True), nullable=True)
