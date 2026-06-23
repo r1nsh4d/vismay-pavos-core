@@ -364,13 +364,13 @@ async def create_bundle_order(
             total_price=unit_price * set_qty * item.count,
         )
         db.add(oi)
-        order_items.append(oi)
+        order_items.append((oi, item.count))  # carry the bundle count
 
     await db.flush()
-    _recalculate_totals(order, items=order_items)
+    _recalculate_totals(order, items=[oi for oi, _ in order_items])
 
-    for oi in order_items:
-        await _deduct_stock_for_item(db, oi, OrderType.bundle, oi.count)
+    for oi, bundle_count in order_items:
+        await _deduct_stock_for_item(db, oi, OrderType.bundle, bundle_count)
 
     order.stock_deducted = True
     await db.flush()
@@ -775,6 +775,7 @@ async def dispatch_order(
     tracking_number: Optional[str],
     tracking_link: Optional[str],
     delivery_notes: Optional[str],
+    dispatched_box_count: Optional[int],
     notes: Optional[str],
 ) -> Order:
     order.status = OrderStatus.dispatched
@@ -783,6 +784,7 @@ async def dispatch_order(
     order.tracking_number = tracking_number
     order.tracking_link = tracking_link
     order.delivery_notes = delivery_notes
+    order.dispatched_box_count = dispatched_box_count if dispatched_box_count else 0
     if notes:
         order.notes = notes
     await db.flush()

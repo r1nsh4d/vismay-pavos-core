@@ -432,6 +432,7 @@ async def dispatch_order(
         tracking_number=dispatch_in.tracking_number,
         tracking_link=dispatch_in.tracking_link,
         delivery_notes=dispatch_in.delivery_notes,
+        dispatched_box_count=dispatch_in.dispatched_box_count,
         notes=dispatch_in.notes,
     )
     await db.commit()

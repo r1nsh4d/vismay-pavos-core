@@ -61,6 +61,7 @@ class OrderDispatchInput(CamelModel):
     tracking_number: Optional[str] = None
     tracking_link: Optional[str] = None
     delivery_notes: Optional[str] = None
+    dispatched_box_count: int = None
     notes: Optional[str] = None
 
 
