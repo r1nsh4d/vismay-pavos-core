@@ -327,7 +327,10 @@ async def stock_excel(
         category_id=category_id,
         product_id=product_id,
     )
-    return excel_response(generate_excel(rows, "Stock"), f"stock_{_now_str()}")
+    return excel_response(
+        generate_excel(
+            rows, "Stock", merge_key="Product", merge_cols=("Sl", "Product", "Category", "Stock Type")),
+        f"stock_{_now_str()}")
 
 
 @router.get("/stock/pdf")
