@@ -884,9 +884,6 @@ async def get_order_report_data(
             "Taluk": o.shop.taluk.name if (o.shop and o.shop.taluk) else "",
             "Executive": f"{o.executive.first_name} {o.executive.last_name}".strip() if o.executive else "",
             "Distributor": _distributor_name(o.distributor) if o.distributor else "",
-            "Order Subtotal": float(o.subtotal),
-            "Order Discount": float(o.discount_amount),
-            "Order Total": float(o.total_amount),
             "Transporter Name": o.delivery_partner or "",
             "Tracking Number": o.tracking_number or "",
             "Boxes Dispatched": o.dispatched_box_count if o.dispatched_box_count is not None else "",
@@ -901,7 +898,11 @@ async def get_order_report_data(
         if not o.items:
             rows.append({**order_cols, "SL": "", "Product": "", "Category": "",
                          "Set Type": "", "Size": "", "Color": "", "Pieces": 0,
-                         "Unit Price": "", "Price Basis": price_label, "Line Total": 0})
+                         "Unit Price": "", "Price Basis": price_label, "Line Total": 0,
+                         "Order Subtotal": float(o.subtotal),
+                         "Order Discount": float(o.discount_amount),
+                         "Order Total": float(o.total_amount)
+                         })
             continue
 
         for idx, item in enumerate(o.items, start=1):
@@ -922,6 +923,9 @@ async def get_order_report_data(
                 "Unit Price": float(item.unit_price or 0),
                 "Price Basis": price_label,
                 "Line Total": float(item.total_price or 0),
+                "Order Subtotal": float(o.subtotal),
+                "Order Discount": float(o.discount_amount),
+                "Order Total": float(o.total_amount),
             })
     return rows
 

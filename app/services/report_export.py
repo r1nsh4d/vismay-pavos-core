@@ -2,7 +2,7 @@ import io
 from datetime import datetime, timezone
 
 import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 
 from reportlab.lib.units import cm, mm
 from reportlab.lib.pagesizes import A4, landscape
@@ -15,7 +15,7 @@ from reportlab.platypus import (
 
 
 # ── Excel ──────────────────────────────────────────────────────────────────────
-
+'''
 def generate_excel(rows: list[dict], sheet_name: str = "Report") -> bytes:
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -80,6 +80,116 @@ def generate_excel(rows: list[dict], sheet_name: str = "Report") -> bytes:
 
     # Freeze header row
     ws.freeze_panes = "A2"
+
+    # Add generated timestamp in a metadata sheet
+    meta_ws = wb.create_sheet("Info")
+    meta_ws.append(["Generated At", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+    meta_ws.append(["Total Rows", len(rows)])
+    meta_ws.append(["Sheet", sheet_name])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+'''
+
+def _merge_runs(ws, merge_key: str, merge_cols, header_row: int = 1) -> None:
+    """Vertically merge `merge_cols` across contiguous rows sharing the same
+    value in `merge_key`. No-op if either is missing."""
+    if not merge_key or not merge_cols:
+        return
+    headers = {c.value: c.column for c in ws[header_row]}
+    if merge_key not in headers:
+        return
+    key_col = headers[merge_key]
+    cols = [headers[h] for h in merge_cols if h in headers]
+    if not cols:
+        return
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    r, last = header_row + 1, ws.max_row
+    while r <= last:
+        cur = ws.cell(row=r, column=key_col).value
+        end = r
+        while end + 1 <= last and ws.cell(row=end + 1, column=key_col).value == cur:
+            end += 1
+        if end > r:  # only multi-row groups
+            for col in cols:
+                ws.merge_cells(start_row=r, start_column=col, end_row=end, end_column=col)
+                ws.cell(row=r, column=col).alignment = center
+        r = end + 1
+
+
+def generate_excel(
+        rows: list[dict],
+        sheet_name: str = "Report",
+        merge_key: str | None = None,
+        merge_cols: tuple[str, ...] | None = None,
+) -> bytes:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = sheet_name[:31]  # Excel sheet name max 31 chars
+
+    if not rows:
+        ws.append(["No data available"])
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    headers = list(rows[0].keys())
+
+    header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    thin_border = Border(
+        left=Side(style="thin"),
+        right=Side(style="thin"),
+        top=Side(style="thin"),
+        bottom=Side(style="thin"),
+    )
+
+    # Write headers
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = header_alignment
+        cell.border = thin_border
+
+    # Write data rows
+    for row_idx, row in enumerate(rows, 2):
+        fill = PatternFill(
+            start_color="EBF3FB" if row_idx % 2 == 0 else "FFFFFF",
+            end_color="EBF3FB" if row_idx % 2 == 0 else "FFFFFF",
+            fill_type="solid",
+        )
+        for col_idx, header in enumerate(headers, 1):
+            value = row.get(header, "")
+            # Convert None to empty string
+            if value is None:
+                value = ""
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = thin_border
+            cell.fill = fill
+
+    # Auto column width
+    for col in ws.columns:
+        max_length = max(
+            (
+                max((len(line) for line in str(cell.value or "").split("\n")), default=0)
+                for cell in col
+            ),
+            default=10,
+        )
+        ws.column_dimensions[col[0].column_letter].width = min(max_length + 4, 45)
+
+    # Row height for header
+    ws.row_dimensions[1].height = 25
+
+    # Freeze header row
+    ws.freeze_panes = "A2"
+
+    # Merge order-level columns across each order's line rows (opt-in)
+    _merge_runs(ws, merge_key, merge_cols)
 
     # Add generated timestamp in a metadata sheet
     meta_ws = wb.create_sheet("Info")

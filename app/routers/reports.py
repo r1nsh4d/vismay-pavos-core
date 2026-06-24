@@ -213,7 +213,39 @@ async def orders_excel(
         status=status,
         order_type=order_type,
     )
-    return excel_response(generate_excel(rows, "Orders"), f"orders_{_now_str()}")
+    return excel_response(
+        generate_excel(
+            rows,
+            "Orders",
+            merge_key="Order Number",
+            merge_cols=(
+                "Order Number",
+                "Bill Number",
+                "Type",
+                "Price Type",
+                "Shipment Status",
+                "Tenant",
+                "Shop",
+                "District",
+                "Taluk",
+                "Executive",
+                "Distributor",
+                "Order Subtotal",
+                "Order Discount",
+                "Order Total",
+                "Transporter Name",
+                "Tracking Number",
+                "Boxes Dispatched",
+                "Delivery Notes",
+                "Booking Date",
+                "Dispatched At",
+                "Delivered At",
+                "Delivery Date",
+                "TAT (days)",
+                ),
+        ),
+        f"orders_{_now_str()}",
+    )
 
 
 @router.get("/orders/pdf")
