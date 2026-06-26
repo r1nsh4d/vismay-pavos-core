@@ -410,7 +410,20 @@ async def products_excel(
         date_from=date_from,
         date_to=date_to,
     )
-    return excel_response(generate_excel(rows, "Products"), f"products_{_now_str()}")
+    return excel_response(
+        generate_excel(
+            rows,
+            "Products",
+            merge_key="Product",
+            merge_cols=(
+                "Product", "Model", "Sell Type", "DP Price", "MRP(Net of Tax)",
+                "Stock (pcs)", "Stock Boxes (pcs)",
+                *[s.value for s in OrderStatus],
+                "Total Ordered (pcs)", "Status",
+            ),
+        ),
+        f"products_{_now_str()}",
+    )
 
 
 @router.get("/products/pdf")

@@ -1125,7 +1125,6 @@ async def get_product_report_data(
 
     product_ids = [p.id for p in products]
 
-    # --- Bundle stock per product, grouped by set type (boxes + piece equivalent) ---
     bs_q = (
         select(
             ProductVariant.product_id.label("product_id"),
@@ -1143,14 +1142,12 @@ async def get_product_report_data(
     )
     bs_rows = (await db.execute(bs_q)).all()
 
-    # product_id -> {"boxes": [(set_name, count), ...], "box_pieces": int}
     bundle_map: dict[uuid.UUID, dict] = defaultdict(lambda: {"boxes": [], "box_pieces": 0})
     for r in bs_rows:
         cnt = int(r.bundle_count)
         bundle_map[r.product_id]["boxes"].append((r.set_type_name, cnt))
         bundle_map[r.product_id]["box_pieces"] += cnt * int(r.total_pieces or 0)
 
-    # --- Pieces ordered per product, per status ---
     status_q = (
         select(
             OrderItem.product_id.label("product_id"),
@@ -1161,7 +1158,6 @@ async def get_product_report_data(
         .where(OrderItem.product_id.in_(product_ids))
         .group_by(OrderItem.product_id, Order.status)
     )
-    # --- Order numbers per product (all statuses) ---
     on_q = (
         select(
             OrderItem.product_id.label("product_id"),
@@ -1180,7 +1176,6 @@ async def get_product_report_data(
         status_q = status_q.where(Order.created_at <= dt)
         on_q = on_q.where(Order.created_at <= dt)
 
-    # product_id -> {status_value: pieces}
     status_map: dict[uuid.UUID, dict[str, int]] = defaultdict(dict)
     for r in (await db.execute(status_q)).all():
         sval = r.status.value if hasattr(r.status, "value") else str(r.status)
@@ -1191,10 +1186,6 @@ async def get_product_report_data(
         for r in (await db.execute(on_q)).all()
     }
 
-    def _numbered(items: list[str]) -> str:
-        return "\n".join(f"{i}. {v}" for i, v in enumerate(items, start=1))
-
-    # status columns in lifecycle order
     status_order = [s.value for s in OrderStatus]
 
     rows = []
@@ -1203,30 +1194,37 @@ async def get_product_report_data(
         stock_pcs = sum(v.stock.individual_count for v in active_variants if v.stock)
 
         binfo = bundle_map.get(p.id, {"boxes": [], "box_pieces": 0})
-        box_lines = [f"{name} x{cnt}" for name, cnt in binfo["boxes"]]
+        box_lines = [f"{name} x{cnt}" for name, cnt in binfo["boxes"]]  # e.g. ["BOX-6 x12", "BOX-8 x8"]
 
+        order_nums = order_num_map.get(p.id, [])
         pstatus = status_map.get(p.id, {})
         total_pieces_ordered = sum(pstatus.values())
 
-        row = {
+        product_cols = {
             "Product": p.name,
             "Model": p.model_ref.name if p.model_ref else "",
             "Sell Type": p.sell_type.value,
             "DP Price": float(p.dp_price),
             "MRP(Net of Tax)": float(p.mrp),
             "Stock (pcs)": stock_pcs,
-            "Stock Boxes": _numbered(box_lines),
             "Stock Boxes (pcs)": binfo["box_pieces"],
+            **{sval: pstatus.get(sval, 0) for sval in status_order},
+            "Total Ordered (pcs)": total_pieces_ordered,
+            "Status": "Active" if p.is_active else "Inactive",
         }
-        # one column per status, piece count
-        for sval in status_order:
-            row[sval] = pstatus.get(sval, 0)
 
-        row["Total Ordered (pcs)"] = total_pieces_ordered
-        row["Order Numbers"] = _numbered(order_num_map.get(p.id, []))
-        row["Status"] = "Active" if p.is_active else "Inactive"
+        n_rows = max(len(box_lines), len(order_nums), 1)
+        for i in range(n_rows):
+            rows.append({
+                **product_cols,
+                # Stock box block — independent of order block
+                "Box SL": i + 1 if i < len(box_lines) else "",
+                "Stock Boxes": box_lines[i] if i < len(box_lines) else "",
+                # Order block — independent of box block
+                "Order SL": i + 1 if i < len(order_nums) else "",
+                "Order Numbers": order_nums[i] if i < len(order_nums) else "",
+            })
 
-        rows.append(row)
     return rows
 
 # ── Shop Report ────────────────────────────────────────────────────────────────
