@@ -894,8 +894,6 @@ async def get_order_report_data(
             "Boxes Dispatched": o.dispatched_box_count if o.dispatched_box_count is not None else "",
             "Delivery Notes": o.delivery_notes or "",
             "Booking Date": booking_dt.strftime("%Y-%m-%d") if booking_dt else "",
-            "Dispatched At": _fmt(o.dispatched_at),
-            "Delivered At": _fmt(o.delivered_at),
             "Delivery Date": _fmt(o.delivered_at),
             "TAT (days)": _tat_days(booking_dt, o.delivered_at),
         }
