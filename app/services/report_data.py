@@ -1142,11 +1142,14 @@ async def get_product_report_data(
     )
     bs_rows = (await db.execute(bs_q)).all()
 
+    # bundle_count from the DB is already PIECES (not number of boxes)
     bundle_map: dict[uuid.UUID, dict] = defaultdict(lambda: {"boxes": [], "box_pieces": 0})
     for r in bs_rows:
-        cnt = int(r.bundle_count)
-        bundle_map[r.product_id]["boxes"].append((r.set_type_name, cnt))
-        bundle_map[r.product_id]["box_pieces"] += cnt * int(r.total_pieces or 0)
+        cnt = int(r.bundle_count)  # pieces
+        tp = int(r.total_pieces or 0)
+        box_count = cnt // tp if tp else 0  # physical box count, derived
+        bundle_map[r.product_id]["boxes"].append((r.set_type_name, tp, box_count))
+        bundle_map[r.product_id]["box_pieces"] += cnt  # sum pieces directly
 
     status_q = (
         select(
@@ -1194,7 +1197,8 @@ async def get_product_report_data(
         stock_pcs = sum(v.stock.individual_count for v in active_variants if v.stock)
 
         binfo = bundle_map.get(p.id, {"boxes": [], "box_pieces": 0})
-        box_lines = [f"{name} x{cnt}" for name, cnt in binfo["boxes"]]  # e.g. ["BOX-6 x12", "BOX-8 x8"]
+        # e.g. ["BOX-6(6) x0", "BOX-8(8) x9"]
+        box_lines = [f"{name}({tp}) x{box_count}" for name, tp, box_count in binfo["boxes"]]
 
         order_nums = order_num_map.get(p.id, [])
         pstatus = status_map.get(p.id, {})
@@ -1217,10 +1221,8 @@ async def get_product_report_data(
         for i in range(n_rows):
             rows.append({
                 **product_cols,
-                # Stock box block — independent of order block
                 "Box SL": i + 1 if i < len(box_lines) else "",
                 "Stock Boxes": box_lines[i] if i < len(box_lines) else "",
-                # Order block — independent of box block
                 "Order SL": i + 1 if i < len(order_nums) else "",
                 "Order Numbers": order_nums[i] if i < len(order_nums) else "",
             })
