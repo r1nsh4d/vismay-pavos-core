@@ -966,7 +966,10 @@ async def get_stock_report_data(
             if v.product and v.product.category
             else ""
         )
-        g = grouped.setdefault(name, {"category": category, "bundle": {}, "individual": []})
+        is_active = v.product.is_active if v.product else False
+        g = grouped.setdefault(
+            name, {"category": category, "is_active": is_active, "bundle": {}, "individual": []}
+        )
 
         stock = v.stock
         if not stock:
@@ -983,11 +986,13 @@ async def get_stock_report_data(
     sl = 1
     for name, g in grouped.items():
         cat = g["category"]
+        status_label = "Active" if g["is_active"] else "Inactive"
         for set_name, cnt in g["bundle"].items():
             rows.append({
                 "Sl": sl,
                 "Product": name,
                 "Category": cat,
+                "Status": status_label,
                 "Stock Type": "Bundle",
                 "Set Type / SKU": set_name,
                 "Count": int(cnt or 0),
@@ -998,6 +1003,7 @@ async def get_stock_report_data(
                 "Sl": sl,
                 "Product": name,
                 "Category": cat,
+                "Status": status_label,
                 "Stock Type": "Individual",
                 "Set Type / SKU": sku,
                 "Count": int(cnt or 0),
@@ -1008,6 +1014,7 @@ async def get_stock_report_data(
                 "Sl": sl,
                 "Product": name,
                 "Category": cat,
+                "Status": status_label,
                 "Stock Type": "",
                 "Set Type / SKU": "",
                 "Count": 0,
