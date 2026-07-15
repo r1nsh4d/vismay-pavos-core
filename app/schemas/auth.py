@@ -5,6 +5,8 @@ from app.schemas.base import CamelModel
 class LoginRequest(CamelModel):
     login: str
     password: str
+    app_version_code: int | None = None   # sent by Android app only, omitted by web
+    client_type: str | None = None        # "android" | omitted for web
 
 
 class RefreshRequest(CamelModel):

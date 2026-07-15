@@ -100,3 +100,17 @@ async def delete_variant_image(image_url: str | None, thumbnail_url: str | None)
             client.delete_object(Bucket=settings.HETZNER_BUCKET_NAME, Key=key)
         except Exception:
             pass
+        
+
+async def upload_apk(file_bytes: bytes, version_code: int) -> tuple[str, str]:
+    key = f"apk/vismay-v{version_code}.apk"
+    s3_client = _get_s3_client()
+    s3_client.put_object(
+        Bucket=settings.HETZNER_BUCKET,
+        Key=key,
+        Body=file_bytes,
+        ContentType="application/vnd.android.package-archive",
+        ACL="public-read",
+    )
+    url = f"{settings.HETZNER_ENDPOINT_URL}/{settings.HETZNER_BUCKET}/{key}"
+    return key, url

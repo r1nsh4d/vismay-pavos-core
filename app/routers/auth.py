@@ -10,6 +10,7 @@ from app.schemas.user import UserCreate
 from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel, ErrorResponse
 from app.services import auth as auth_mgmt
 from app.services import users as user_mgmt
+from app.services import app_version as app_version_mgmt
 from app.services.users import serialize_user
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -26,6 +27,28 @@ async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
 
 @router.post("/login", response_model=CommonResponse)
 async def login(login_in: LoginRequest, db: AsyncSession = Depends(get_db)):
+    if login_in.client_type == "android":
+        if login_in.app_version_code is None:
+            raise AppException(
+                status_code=400,
+                detail="App version is required",
+                error_code="APP_VERSION_REQUIRED",
+            )
+
+        latest = await app_version_mgmt.get_latest_active_version(db)
+        if latest and login_in.app_version_code < latest.min_required_version_code:
+            exc = AppException(
+                status_code=426,
+                detail="Please update the app to continue",
+                error_code="APP_UPDATE_REQUIRED",
+            )
+            exc.data = {
+                "apkUrl": latest.apk_url,
+                "latestVersionCode": latest.version_code,
+                "latestVersionName": latest.version_name,
+            }
+            raise exc
+
     user = await auth_mgmt.authenticate(db, login_in.login, login_in.password)
     if not user:
         raise AppException(status_code=400, detail="Invalid credentials")
@@ -58,16 +81,3 @@ async def get_me(
 ):
     user = await user_mgmt.get_user_by_id(db, current_user.id)
     return ResponseModel(data=user_mgmt.serialize_user(user), message="Profile fetched successfully")
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -14,6 +14,7 @@ from app.models.product import Product, ProductVariant, SellType
 from app.models.stock import Stock, BundleStock
 from app.models.order import Order, OrderItem, OrderStatus, OrderType
 from app.models.target import ExecutiveTarget, TargetType       # ← new
+from app.models.app_version import AppVersion
 from app.models.base import BaseModel
 from app.database import Base
 
@@ -47,4 +48,5 @@ __all__ = [
     "OrderType",
     "ExecutiveTarget",
     "TargetType",
+    "AppVersion",
 ]
