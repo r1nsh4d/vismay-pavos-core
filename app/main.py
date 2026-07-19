@@ -7,7 +7,7 @@ from app.core.exceptions import register_exception_handlers
 from app.database import engine, Base
 from app.routers import auth, tenants, districts, taluk, product_models, media, attendance
 from app.routers import users, categories, set_types, products, stocks, states
-from app.routers import orders, targets
+from app.routers import orders, targets, distributors
 from app.routers import roles, permissions, seed
 from app.routers import shop
 from app.routers import reports
@@ -65,6 +65,7 @@ app.include_router(media.router, prefix=API_PREFIX)   # ← ADD
 app.include_router(stocks.router, prefix=API_PREFIX)
 app.include_router(orders.router, prefix=API_PREFIX)
 app.include_router(targets.router, prefix=API_PREFIX)
+app.include_router(distributors.router, prefix=API_PREFIX)
 app.include_router(attendance.router, prefix=API_PREFIX)
 app.include_router(reports.router, prefix=API_PREFIX)
 app.include_router(app_version.router, prefix=API_PREFIX)

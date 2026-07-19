@@ -10,10 +10,11 @@ from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel
 from app.schemas.district import DistrictCreate, DistrictUpdate, DistrictResponse
 from app.services import districts as district_mgmt
 
-router = APIRouter(
-    prefix="/districts", tags=["Districts"],
-    dependencies=[Depends(require_roles("super_admin", "admin", "scm_user"))]
-)
+# Executives may read (list / view) districts; only admin & scm roles may manage them.
+_read_roles = Depends(require_roles("super_admin", "admin", "scm_user", "executive"))
+_manage_roles = Depends(require_roles("super_admin", "admin", "scm_user"))
+
+router = APIRouter(prefix="/districts", tags=["Districts"])
 
 
 def _parse_uuids(val: str | None) -> List[uuid.UUID]:
@@ -25,7 +26,7 @@ def _parse_uuids(val: str | None) -> List[uuid.UUID]:
         raise HTTPException(status_code=400, detail="Invalid UUID in query parameter")
 
 
-@router.get("/search", response_model=CommonResponse)
+@router.get("/search", response_model=CommonResponse, dependencies=[_read_roles])
 async def search_districts(
     q: str | None = Query(default=None),
     state_ids: str | None = Query(default=None, description="Comma-separated state UUIDs"),
@@ -43,13 +44,13 @@ async def search_districts(
     )
 
 
-@router.post("", response_model=CommonResponse)
+@router.post("", response_model=CommonResponse, dependencies=[_manage_roles])
 async def create_district(data: DistrictCreate, db: AsyncSession = Depends(get_db)):
     district = await district_mgmt.create_district(db, data)
     return ResponseModel(data=district_mgmt.serialize_district(district), message="District created")
 
 
-@router.get("/{district_id}", response_model=CommonResponse)
+@router.get("/{district_id}", response_model=CommonResponse, dependencies=[_read_roles])
 async def get_district(district_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     district = await district_mgmt.get_district_by_id(db, district_id)
     if not district:
@@ -57,7 +58,7 @@ async def get_district(district_id: uuid.UUID, db: AsyncSession = Depends(get_db
     return ResponseModel(data=district_mgmt.serialize_district(district), message="District fetched")
 
 
-@router.put("/{district_id}", response_model=CommonResponse)
+@router.put("/{district_id}", response_model=CommonResponse, dependencies=[_manage_roles])
 async def update_district(district_id: uuid.UUID, data: DistrictUpdate, db: AsyncSession = Depends(get_db)):
     district = await district_mgmt.get_district_by_id(db, district_id)
     if not district:
@@ -66,7 +67,7 @@ async def update_district(district_id: uuid.UUID, data: DistrictUpdate, db: Asyn
     return ResponseModel(data=district_mgmt.serialize_district(district), message="District updated")
 
 
-@router.patch("/{district_id}/toggle", response_model=CommonResponse)
+@router.patch("/{district_id}/toggle", response_model=CommonResponse, dependencies=[_manage_roles])
 async def toggle_district(district_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     district = await district_mgmt.get_district_by_id(db, district_id)
     if not district:
@@ -78,7 +79,7 @@ async def toggle_district(district_id: uuid.UUID, db: AsyncSession = Depends(get
     )
 
 
-@router.delete("/{district_id}", response_model=CommonResponse)
+@router.delete("/{district_id}", response_model=CommonResponse, dependencies=[_manage_roles])
 async def delete_district(district_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     district = await district_mgmt.get_district_by_id(db, district_id)
     if not district:

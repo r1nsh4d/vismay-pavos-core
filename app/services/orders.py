@@ -168,6 +168,7 @@ async def search_orders(
         term = f"%{search.strip()}%"
         filters.append(or_(
             Order.order_number.ilike(term),
+            Order.bill_number.ilike(term),
             Order.notes.ilike(term),
         ))
 

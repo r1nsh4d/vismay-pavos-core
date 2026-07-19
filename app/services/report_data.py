@@ -893,9 +893,26 @@ async def get_order_report_data(
             "Tracking Number": o.tracking_number or "",
             "Boxes Dispatched": o.dispatched_box_count if o.dispatched_box_count is not None else "",
             "Delivery Notes": o.delivery_notes or "",
+            # ── Action timestamps (full lifecycle; blank until the stage is reached) ──
+            "Placed At": _fmt(o.placed_at),
+            "Verified At": _fmt(o.verified_at),
+            "Assigned At": _fmt(o.assigned_at),
+            "Approved At": _fmt(o.approved_at),
+            "Estimated At": _fmt(o.estimated_at),
+            "Billed At": _fmt(o.billed_at),
+            "Packing At": _fmt(o.packing_at),
+            "Dispatched At": _fmt(o.dispatched_at),
+            "Delivered At": _fmt(o.delivered_at),
+            "Cancelled At": _fmt(o.cancelled_at),
+            "Rejected At": _fmt(o.rejected_at),
+            "Returned At": _fmt(o.returned_at),
+            # ── Summary dates ──
             "Booking Date": booking_dt.strftime("%Y-%m-%d") if booking_dt else "",
             "Delivery Date": _fmt(o.delivered_at),
-            "TAT (days)": _tat_days(booking_dt, o.delivered_at),
+            # ── Turn-around times ──
+            # Warehouse TAT: billed → dispatched (dwell time inside the warehouse).
+            # Delivery TAT: dispatched → delivered (transit time).
+            "Delivery TAT (days)": _tat_days(booking_dt, o.delivered_at),
         }
 
         if not o.items:

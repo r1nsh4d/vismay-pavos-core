@@ -166,6 +166,9 @@ def generate_excel(
             # Convert None to empty string
             if value is None:
                 value = ""
+            # Client requirement: all text values shown uppercase (numbers/dates untouched)
+            if isinstance(value, str):
+                value = value.upper()
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             cell.border = thin_border
@@ -259,8 +262,9 @@ def generate_pdf(
 
     table_data = [[Paragraph(f"<b>{h}</b>", cell_style) for h in headers]]
     for row in rows:
+        # Client requirement: all cell values shown uppercase (digits/dates unaffected)
         table_data.append([
-            Paragraph(str(row.get(h, "") or "").replace("\n", "<br/>"), cell_style)
+            Paragraph(str(row.get(h, "") or "").upper().replace("\n", "<br/>"), cell_style)
             for h in headers
         ])
 
@@ -367,31 +371,31 @@ def _styles():
     }
 
 
-def build_invoice_pdf(order: dict) -> bytes:
+def build_sales_order_pdf(order: dict) -> bytes:
     s = _styles()
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
         leftMargin=16 * mm, rightMargin=16 * mm, topMargin=16 * mm, bottomMargin=16 * mm,
-        title=f"Invoice {order.get('orderNumber', '')}",
+        title=f"Sales Order {order.get('orderNumber', '')}",
     )
     avail = doc.width
     story = []
 
-    # ── Header: brand left, INVOICE + meta right ──
+    # ── Header: brand left, SALES ORDER + meta right ──
     ts = order.get("statusTimestamps") or {}
     meta = (
         f"<b>{order.get('orderNumber','')}</b><br/>"
-        f"Invoice date: {_date(ts.get('billedAt') or order.get('createdAt'))}<br/>"
+        f"Date: {_date(ts.get('billedAt') or order.get('createdAt'))}<br/>"
         f"Order date: {_date(order.get('createdAt'))}<br/>"
         f"Status: {str(order.get('status','')).upper()}"
     )
     brand_cell = [
-        Paragraph(order.get("tenantName") or "Invoice", s["brand"]),
+        Paragraph(order.get("tenantName") or "Sales Order", s["brand"]),
         Paragraph(f"Distributed via {order.get('distributorName') or '-'}", s["brand_sub"]),
     ]
     head = Table([[brand_cell,
-                   [Paragraph("INVOICE", s["doc_title"]), Spacer(1, 4), Paragraph(meta, s["meta"])]]],
+                   [Paragraph("SALES ORDER", s["doc_title"]), Spacer(1, 4), Paragraph(meta, s["meta"])]]],
                  colWidths=[avail * 0.55, avail * 0.45])
     head.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
                               ("LEFTPADDING", (0, 0), (-1, -1), 0),
@@ -486,7 +490,7 @@ def build_invoice_pdf(order: dict) -> bytes:
     # ── Footer ──
     story += [Spacer(1, 28),
               HRFlowable(width="100%", thickness=0.5, color=LINE, spaceAfter=8),
-              Paragraph(f"System-generated invoice for {order.get('orderNumber','')}. "
+              Paragraph(f"System-generated sales order for {order.get('orderNumber','')}. "
                         f"No signature required.", s["foot"])]
 
     doc.build(story)

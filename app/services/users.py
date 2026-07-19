@@ -115,6 +115,33 @@ async def search_users(
     return result.scalars().unique().all(), total
 
 
+async def get_distributors(
+    db: AsyncSession,
+    q: str | None = None,
+    tenant_id: uuid.UUID | None = None,
+    is_active: bool | None = None,
+    page: int = 1,
+    limit: int = 20,
+) -> Tuple[List[User], int]:
+    """List users whose role is `distributor` — a read-only lookup for order assignment."""
+    query = _user_query().where(User.role.has(Role.name == "distributor"))
+
+    if q:
+        query = query.where(
+            or_(User.username.ilike(f"%{q}%"), User.email.ilike(f"%{q}%"))
+        )
+    if is_active is not None:
+        query = query.where(User.is_active == is_active)
+    if tenant_id:
+        query = query.where(User.user_tenants.any(UserTenant.tenant_id == tenant_id))
+
+    total_result = await db.execute(select(func.count()).select_from(query.subquery()))
+    total = total_result.scalar() or 0
+
+    result = await db.execute(query.offset((page - 1) * limit).limit(limit))
+    return result.scalars().unique().all(), total
+
+
 # ── Create / Update / Delete ───────────────────────────────────────────────────
 
 async def create_user(db: AsyncSession, user_in: UserCreate) -> User:

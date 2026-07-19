@@ -17,7 +17,7 @@ from app.schemas.order import (
 from app.services import orders as order_svc
 from app.models.order import OrderStatus, OrderType, CANCELLABLE_STATUSES
 from app.models.user import User
-from app.services.report_export import build_invoice_pdf
+from app.services.report_export import build_sales_order_pdf
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
 
@@ -564,7 +564,7 @@ async def get_order_hierarchy(
 
 
 @router.get("/{order_id}/invoice")
-async def order_invoice(
+async def order_sales_order(
     order_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -573,6 +573,6 @@ async def order_invoice(
     if not order:
         return ErrorResponseModel(code=404, message="Order not found", error={})
     data = order_svc.serialize_order(order)
-    pdf = build_invoice_pdf(data)
-    return pdf_response(pdf, f"invoice_{data['orderNumber']}")
+    pdf = build_sales_order_pdf(data)
+    return pdf_response(pdf, f"sales_order_{data['orderNumber']}")
 

@@ -1,19 +1,16 @@
-from pydantic import Field
+from datetime import datetime
+
 from app.schemas.base import CamelModel
 
+
 class AppVersionOut(CamelModel):
-    version_code: int
-    version_name: str
-    min_required_version_code: int
-    apk_url: str
-    release_notes: str | None = None
+    latest_version: str
+    min_supported_version: str
+    force_update: bool
+    download_url: str
+    release_date: datetime
+    release_notes: list[str] = []
+
 
 class VersionCheckIn(CamelModel):
-    version_code: int
-
-class VersionCheckOut(CamelModel):
-    force_update: bool
-    latest_version_code: int
-    latest_version_name: str
-    apk_url: str
-    release_notes: str | None = None
+    version: str
