@@ -729,12 +729,17 @@ async def estimate_order(db: AsyncSession, order: Order, notes: Optional[str]) -
     return await get_order_by_id(db, order.id)
 
 
+def _apply_bill_number(order: Order, bill_number: Optional[str]) -> None:
+    """Set/update the bill number when a non-empty value is supplied (never wipes an existing one)."""
+    if bill_number:
+        order.bill_number = bill_number
+
+
 async def bill_order(
     db: AsyncSession, order: Order, bill_number: Optional[str] = None, notes: Optional[str] = None,) -> Order:
     order.status = OrderStatus.billed
     _stamp(order, OrderStatus.billed)
-    if bill_number:
-        order.bill_number = bill_number
+    _apply_bill_number(order, bill_number)
     if notes:
         order.notes = notes
     await db.flush()
@@ -747,6 +752,7 @@ async def apply_discount(
     discount_percent: Optional[float],
     discount_flat: Optional[float],
     notes: Optional[str],
+    bill_number: Optional[str] = None,
 ) -> Order:
     if discount_percent is not None:
         if not (0 <= discount_percent <= 100):
@@ -758,16 +764,20 @@ async def apply_discount(
         order.discount_flat = discount_flat
     if notes:
         order.notes = notes
+    _apply_bill_number(order, bill_number)
     _recalculate_totals(order)
     await db.flush()
     return await get_order_by_id(db, order.id)
 
 
-async def move_to_packing(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
+async def move_to_packing(
+    db: AsyncSession, order: Order, notes: Optional[str], bill_number: Optional[str] = None
+) -> Order:
     order.status = OrderStatus.packing
     _stamp(order, OrderStatus.packing)
     if notes:
         order.notes = notes
+    _apply_bill_number(order, bill_number)
     await db.flush()
     return await get_order_by_id(db, order.id)
 
@@ -781,6 +791,7 @@ async def dispatch_order(
     delivery_notes: Optional[str],
     dispatched_box_count: Optional[int],
     notes: Optional[str],
+    bill_number: Optional[str] = None,
 ) -> Order:
     order.status = OrderStatus.dispatched
     _stamp(order, OrderStatus.dispatched)
@@ -791,25 +802,31 @@ async def dispatch_order(
     order.dispatched_box_count = dispatched_box_count if dispatched_box_count else 0
     if notes:
         order.notes = notes
+    _apply_bill_number(order, bill_number)
     await db.flush()
     return await get_order_by_id(db, order.id)
 
 
-async def deliver_order(db: AsyncSession, order: Order, notes: Optional[str]) -> Order:
+async def deliver_order(
+    db: AsyncSession, order: Order, notes: Optional[str], bill_number: Optional[str] = None
+) -> Order:
     order.status = OrderStatus.delivered
     _stamp(order, OrderStatus.delivered)
     if notes:
         order.notes = notes
+    _apply_bill_number(order, bill_number)
     await db.flush()
     return await get_order_by_id(db, order.id)
 
 
 async def update_delivered_at(
-    db: AsyncSession, order: Order, delivered_at: datetime, notes: Optional[str]
+    db: AsyncSession, order: Order, delivered_at: datetime, notes: Optional[str],
+    bill_number: Optional[str] = None,
 ) -> Order:
     order.delivered_at = delivered_at
     if notes:
         order.notes = notes
+    _apply_bill_number(order, bill_number)
     await db.flush()
     return await get_order_by_id(db, order.id)
 
@@ -1138,6 +1155,7 @@ def serialize_order_list(order: Order) -> dict:
     return {
         "id": str(order.id),
         "orderNumber": order.order_number,
+        "billNumber": order.bill_number,
         "tenantId": str(order.tenant_id),
         "tenantName": order.tenant.name if order.tenant else None,
         "shopId": str(order.shop_id),
@@ -1171,6 +1189,7 @@ def serialize_order(order: Order) -> dict:
     return {
         "id": str(order.id),
         "orderNumber": order.order_number,
+        "billNumber": order.bill_number,
         "tenantId": str(order.tenant_id),
         "tenantName": order.tenant.name if order.tenant else None,
         "shopId": str(order.shop_id),
@@ -1220,6 +1239,7 @@ def serialize_order(order: Order) -> dict:
             {
                 "id": str(co.id),
                 "orderNumber": co.order_number,
+                "billNumber": co.bill_number,
                 "status": co.status,
                 "orderType": co.order_type,
                 "priceType": co.price_type,

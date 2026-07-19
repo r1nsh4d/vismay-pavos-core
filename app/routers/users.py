@@ -13,7 +13,7 @@ from app.dependencies import require_roles, get_current_user
 
 router = APIRouter(
     prefix="/users", tags=["Users"],
-    dependencies=[Depends(require_roles("super_admin", "admin"))]
+    dependencies=[Depends(require_roles("super_admin", "admin", "scm_user", "executive"))]
 )
 
 

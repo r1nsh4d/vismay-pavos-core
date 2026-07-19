@@ -9,7 +9,7 @@ from app.routers.reports import pdf_response
 from app.schemas.common import CommonResponse, ResponseModel, ErrorResponseModel, PaginatedResponse
 from app.schemas.order import (
     BundleOrderCreate, IndividualOrderCreate,
-    OrderNoteUpdate, OrderDiscountUpdate,
+    OrderNoteUpdate, OrderNoteBillUpdate, OrderDiscountUpdate,
     OrderAssignDistributorInput, OrderDispatchInput,
     SplitOrderInput, CreateOrderReturnInput,
     UpdateDeliveredAtInput, UpdateOrderItemInput, OrderBillUpdate,
@@ -391,6 +391,7 @@ async def apply_discount(
         discount_percent=discount_in.discount_percent,
         discount_flat=discount_in.discount_flat,
         notes=discount_in.notes,
+        bill_number=discount_in.bill_number,
     )
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
@@ -402,7 +403,7 @@ async def apply_discount(
 @router.patch("/{order_id}/packing", response_model=CommonResponse)
 async def move_to_packing(
     order_id: uuid.UUID,
-    body: OrderNoteUpdate,
+    body: OrderNoteBillUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -411,7 +412,7 @@ async def move_to_packing(
         return ErrorResponseModel(code=404, message="Order not found", error={})
     if order.status != OrderStatus.billed:
         return ErrorResponseModel(code=400, message="Only billed orders can move to packing", error={})
-    order = await order_svc.move_to_packing(db, order, notes=body.notes)
+    order = await order_svc.move_to_packing(db, order, notes=body.notes, bill_number=body.bill_number)
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
     return ResponseModel(data=order_svc.serialize_order(order), message="Order moved to packing")
@@ -437,6 +438,7 @@ async def dispatch_order(
         delivery_notes=dispatch_in.delivery_notes,
         dispatched_box_count=dispatch_in.dispatched_box_count,
         notes=dispatch_in.notes,
+        bill_number=dispatch_in.bill_number,
     )
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
@@ -446,7 +448,7 @@ async def dispatch_order(
 @router.patch("/{order_id}/deliver", response_model=CommonResponse)
 async def deliver_order(
     order_id: uuid.UUID,
-    body: OrderNoteUpdate,
+    body: OrderNoteBillUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -455,7 +457,7 @@ async def deliver_order(
         return ErrorResponseModel(code=404, message="Order not found", error={})
     if order.status != OrderStatus.dispatched:
         return ErrorResponseModel(code=400, message="Only dispatched orders can be delivered", error={})
-    order = await order_svc.deliver_order(db, order, notes=body.notes)
+    order = await order_svc.deliver_order(db, order, notes=body.notes, bill_number=body.bill_number)
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
     return ResponseModel(data=order_svc.serialize_order(order), message="Order delivered")
@@ -473,7 +475,9 @@ async def update_delivered_at(
         return ErrorResponseModel(code=404, message="Order not found", error={})
     if order.status != OrderStatus.delivered:
         return ErrorResponseModel(code=400, message="Only delivered orders can update delivery date", error={})
-    order = await order_svc.update_delivered_at(db, order, body.delivered_at, notes=body.notes)
+    order = await order_svc.update_delivered_at(
+        db, order, body.delivered_at, notes=body.notes, bill_number=body.bill_number
+    )
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
     return ResponseModel(data=order_svc.serialize_order(order), message="Delivery date updated")
