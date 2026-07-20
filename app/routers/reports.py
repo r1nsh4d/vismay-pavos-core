@@ -195,6 +195,7 @@ async def orders_excel(
     assigned_executive: uuid.UUID | None = None,
     status: OrderStatus | None = None,
     order_type: OrderType | None = None,
+    include_children: bool = True,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -212,6 +213,7 @@ async def orders_excel(
         assigned_executive=assigned_executive,
         status=status,
         order_type=order_type,
+        include_children=include_children,
     )
     return excel_response(
         generate_excel(
@@ -272,6 +274,7 @@ async def orders_pdf(
     assigned_executive: uuid.UUID | None = None,
     status: OrderStatus | None = None,
     order_type: OrderType | None = None,
+    include_children: bool = True,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -289,6 +292,7 @@ async def orders_pdf(
         assigned_executive=assigned_executive,
         status=status,
         order_type=order_type,
+        include_children=include_children,
     )
     ORDER_COL_WEIGHTS = {
         "Order Number": 1.5, "Date": 1, "Type": 0.8, "Price Type": 0.6,

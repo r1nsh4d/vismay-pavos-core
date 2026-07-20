@@ -821,10 +821,11 @@ async def get_order_report_data(
     assigned_executive: Optional[uuid.UUID] = None,
     status: Optional[OrderStatus] = None,
     order_type: Optional[OrderType] = None,
+    include_children: bool = True,
 ) -> list[dict]:
     query = (
         select(Order)
-        .where(Order.is_deleted == False, Order.parent_order_id == None)  # noqa
+        .where(Order.is_deleted == False)
         .options(
             selectinload(Order.items).selectinload(OrderItem.product).selectinload(Product.category),
             selectinload(Order.items).selectinload(OrderItem.set_type),
@@ -836,6 +837,11 @@ async def get_order_report_data(
             selectinload(Order.tenant),
         )
     )
+
+    # Parent orders only when children are excluded; by default split children are included
+    # so their moved-out items/amounts are counted (parent + child together = original total).
+    if not include_children:
+        query = query.where(Order.parent_order_id == None)  # noqa
 
     query = _date_filters(query, Order, date_from, date_to)
 
