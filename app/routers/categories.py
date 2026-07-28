@@ -8,7 +8,7 @@ from app.schemas.category import CategoryCreate, CategoryUpdate, CategoryRespons
 from app.services import categories as cat_svc
 
 router = APIRouter(
-    prefix="/categories", tags=["Categories"], dependencies=[Depends(require_roles("super_admin", "admin", "scm_user"))])
+    prefix="/categories", tags=["Categories"], dependencies=[Depends(require_roles("super_admin", "admin", "scm_user", "executive"))])
 
 
 @router.post("", response_model=CommonResponse)

@@ -1,6 +1,7 @@
 import uuid
+from typing import List
 from datetime import date
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -22,6 +23,26 @@ from app.services.report_export import build_sales_order_pdf
 router = APIRouter(prefix="/orders", tags=["Orders"])
 
 
+def _parse_statuses(val: str | None) -> List[OrderStatus] | None:
+    """Parse a single or comma-separated status string into a list of OrderStatus.
+
+    Unknown values are ignored (not an error), so a filter that includes non-status
+    values like 'unhold' or 'partial' still applies the valid ones.
+    """
+    if not val:
+        return None
+    statuses: List[OrderStatus] = []
+    for part in val.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            statuses.append(OrderStatus(part))
+        except ValueError:
+            continue  # ignore anything that isn't a real status
+    return statuses or None
+
+
 # ── Search / Fetch ─────────────────────────────────────────────────────────────
 
 @router.get("/search", response_model=CommonResponse)
@@ -31,7 +52,7 @@ async def search_orders(
     shop_id: uuid.UUID | None = None,
     distributor_id: uuid.UUID | None = None,
     assigned_executive: uuid.UUID | None = None,
-    status: OrderStatus | None = None,
+    status: str | None = Query(default=None, description="Order status — single value or comma-separated for multiple (e.g. placed,verified,billed)"),
     order_type: OrderType | None = None,
     parent_only: bool = True,
     date_from: date | None = None,
@@ -45,7 +66,7 @@ async def search_orders(
         db, tenant_id=tenant_id, shop_id=shop_id,
         distributor_id=distributor_id,
         assigned_executive=assigned_executive,
-        status=status, order_type=order_type,
+        status=_parse_statuses(status), order_type=order_type,
         parent_only=parent_only,
         date_from=date_from, date_to=date_to,
         search=q, page=page, limit=limit,

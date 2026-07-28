@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.models.attendance import WorkLog, LocationEvent, ShopVisit, LocationEventType, AttendanceStatus
 from app.models.shop import Shop
 from app.core.exceptions import AppException
+from app.config import settings
 
 
 def _now():
@@ -17,6 +18,13 @@ def _now():
 
 def _today():
     return datetime.now(timezone.utc).date()
+
+
+def _aware(dt):
+    """Normalise a datetime to timezone-aware UTC for safe comparison."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -57,7 +65,16 @@ async def _get_or_create_work_log(
 
 
 async def _calculate_total_distance(db: AsyncSession, work_log_id: uuid.UUID) -> float:
-    """Calculate total distance from location pings."""
+    """
+    Total distance travelled in the day, cleaned for GPS noise.
+
+    1. Order all location pings by time.
+    2. Drop pings whose reported accuracy is worse than TA_GPS_MAX_ACCURACY_M.
+    3. Sum straight-line (Haversine) hops, skipping:
+         - hops shorter than TA_MIN_SEGMENT_M  (GPS drift while stationary), and
+         - hops that fall entirely inside a shop visit (standstill drift).
+    4. Multiply by TA_ROAD_FACTOR to approximate road distance vs crow-flies.
+    """
     result = await db.execute(
         select(LocationEvent)
         .where(
@@ -68,12 +85,40 @@ async def _calculate_total_distance(db: AsyncSession, work_log_id: uuid.UUID) ->
     )
     pings = result.scalars().all()
 
-    total_km = 0.0
-    for i in range(1, len(pings)):
-        total_km += _haversine_km(
-            float(pings[i - 1].latitude), float(pings[i - 1].longitude),
-            float(pings[i].latitude), float(pings[i].longitude),
-        )
+    # Shop-visit time windows — used to ignore drift accumulated while inside a shop.
+    intervals = []
+    if settings.TA_EXCLUDE_IN_SHOP:
+        visits = (await db.execute(
+            select(ShopVisit).where(ShopVisit.work_log_id == work_log_id)
+        )).scalars().all()
+        intervals = [(_aware(v.entry_at), _aware(v.exit_at)) for v in visits if v.entry_at]
+
+    def _inside_shop(ts) -> bool:
+        ts = _aware(ts)
+        for start, end in intervals:
+            if start and ts >= start and (end is None or ts <= end):
+                return True
+        return False
+
+    max_acc = settings.TA_GPS_MAX_ACCURACY_M
+    kept = [p for p in pings if p.accuracy is None or float(p.accuracy) <= max_acc]
+
+    total_m = 0.0
+    for i in range(1, len(kept)):
+        a, b = kept[i - 1], kept[i]
+        seg_m = _haversine_km(
+            float(a.latitude), float(a.longitude),
+            float(b.latitude), float(b.longitude),
+        ) * 1000.0
+
+        if seg_m < settings.TA_MIN_SEGMENT_M:
+            continue  # jitter / standing still
+        if _inside_shop(a.recorded_at) and _inside_shop(b.recorded_at):
+            continue  # drift while parked inside a shop
+
+        total_m += seg_m
+
+    total_km = (total_m / 1000.0) * settings.TA_ROAD_FACTOR
     return round(total_km, 2)
 
 
@@ -323,6 +368,29 @@ async def record_shop_entry(
     if open_visit:
         raise AppException(status_code=400, detail="Already checked into this shop")
 
+    # ── Geofence: match the executive's live position against the shop's coordinates ──
+    # First-ever entry with no shop coordinates → capture the current position as the
+    # shop location (fills missing data only, never overwrites). Once a shop has
+    # coordinates, entries are validated to be within the allowed radius.
+    addr = dict(shop.address or {})
+    shop_lat, shop_lng = addr.get("latitude"), addr.get("longitude")
+
+    if shop_lat is None or shop_lng is None:
+        addr["latitude"] = latitude
+        addr["longitude"] = longitude
+        shop.address = addr  # reassign so SQLAlchemy tracks the JSON change
+    elif settings.SHOP_ENTRY_GEOFENCE:
+        distance_m = _haversine_km(float(shop_lat), float(shop_lng), latitude, longitude) * 1000.0
+        allowed_m = settings.SHOP_ENTRY_MAX_DISTANCE_M + (accuracy or 0)
+        if distance_m > allowed_m:
+            raise AppException(
+                status_code=400,
+                detail=(
+                    f"You appear to be {int(distance_m)} m from the shop. "
+                    f"You must be within {int(settings.SHOP_ENTRY_MAX_DISTANCE_M)} m to check in."
+                ),
+            )
+
     now = _now()
 
     visit = ShopVisit(
@@ -556,6 +624,76 @@ async def get_travel_allowance_summary(
         "userName": f"{user.first_name} {user.last_name}".strip() if user else "",
         "year": year,
         "month": month,
+        "totalDaysWorked": total_days,
+        "totalDistanceKm": round(total_distance, 2),
+        "totalWorkHours": round(total_minutes / 60, 2),
+        "totalShopsVisited": total_shops,
+        "dailyBreakdown": daily_breakdown,
+    }
+
+
+async def get_activity_summary(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    date_from: date,
+    date_to: date,
+) -> dict:
+    """Activity for one executive over any date range (single day to multiple months).
+
+    Returns totals plus a per-day breakdown with that day's shop visits — the data
+    a UI needs to render an employee's activity for a chosen time frame.
+    """
+    from app.models.user import User
+
+    user = await db.scalar(select(User).where(User.id == user_id))
+
+    result = await db.execute(
+        select(WorkLog)
+        .where(
+            WorkLog.user_id == user_id,
+            WorkLog.is_deleted == False,
+            WorkLog.work_date >= date_from,
+            WorkLog.work_date <= date_to,
+        )
+        .options(selectinload(WorkLog.shop_visits).selectinload(ShopVisit.shop))
+        .order_by(WorkLog.work_date.asc())
+    )
+    logs = result.scalars().all()
+
+    total_days = len(logs)
+    total_distance = sum(float(l.total_distance_km or 0) for l in logs)
+    total_minutes = sum(l.total_work_minutes or 0 for l in logs)
+    total_shops = sum(l.total_shops_visited or 0 for l in logs)
+
+    daily_breakdown = []
+    for log in logs:
+        daily_breakdown.append({
+            "date": str(log.work_date),
+            "checkinAt": log.checkin_at.isoformat() if log.checkin_at else None,
+            "checkoutAt": log.checkout_at.isoformat() if log.checkout_at else None,
+            "checkinAddress": log.checkin_address,
+            "checkoutAddress": log.checkout_address,
+            "workMinutes": log.total_work_minutes,
+            "workHours": round(log.total_work_minutes / 60, 2) if log.total_work_minutes else 0,
+            "distanceKm": float(log.total_distance_km or 0),
+            "shopsVisited": log.total_shops_visited or 0,
+            "status": log.status,
+            "shopVisits": [
+                {
+                    "shopName": v.shop.name if v.shop else "",
+                    "entryAt": v.entry_at.isoformat() if v.entry_at else None,
+                    "exitAt": v.exit_at.isoformat() if v.exit_at else None,
+                    "durationMinutes": v.duration_minutes,
+                }
+                for v in sorted(log.shop_visits, key=lambda x: x.entry_at)
+            ],
+        })
+
+    return {
+        "userId": str(user_id),
+        "userName": f"{user.first_name} {user.last_name or ''}".strip() if user else "",
+        "dateFrom": str(date_from),
+        "dateTo": str(date_to),
         "totalDaysWorked": total_days,
         "totalDistanceKm": round(total_distance, 2),
         "totalWorkHours": round(total_minutes / 60, 2),

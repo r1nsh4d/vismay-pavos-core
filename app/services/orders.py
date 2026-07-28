@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, date, timezone
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Union
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -136,7 +136,7 @@ async def search_orders(
     shop_id: Optional[uuid.UUID] = None,
     distributor_id: Optional[uuid.UUID] = None,
     assigned_executive: Optional[uuid.UUID] = None,
-    status: Optional[OrderStatus] = None,
+    status: Optional[Union[OrderStatus, List[OrderStatus]]] = None,
     order_type: Optional[OrderType] = None,
     parent_only: bool = True,
     date_from: Optional[date] = None,
@@ -157,7 +157,10 @@ async def search_orders(
     if assigned_executive:
         filters.append(Order.assigned_executive == assigned_executive)
     if status:
-        filters.append(Order.status == status)
+        if isinstance(status, (list, tuple, set)):
+            filters.append(Order.status.in_(list(status)))
+        else:
+            filters.append(Order.status == status)
     if order_type:
         filters.append(Order.order_type == order_type)
     if date_from:

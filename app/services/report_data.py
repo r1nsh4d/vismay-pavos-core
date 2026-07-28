@@ -14,6 +14,7 @@ from app.models.district import District
 from app.models.states import State
 from app.models.taluk import Taluk
 from app.models.shop import Shop
+from app.models.attendance import WorkLog, ShopVisit
 from app.models.target import ExecutiveTarget, TargetType
 from app.models.set_type import SetType
 from app.models.category import Category
@@ -1505,6 +1506,15 @@ async def get_executive_performance_data(
     for exec_id, status, cnt, value in agg_rows:
         by_exec[exec_id][status] = (cnt, float(value))
 
+    # ---- total pieces per executive (sum of order-item counts) ----
+    pieces_rows = (await db.execute(
+        select(Order.assigned_executive, func.coalesce(func.sum(OrderItem.count), 0))
+        .select_from(Order).join(OrderItem, OrderItem.order_id == Order.id)
+        .where(*order_filters)
+        .group_by(Order.assigned_executive)
+    )).all()
+    pieces_by_exec = {exec_id: int(p) for exec_id, p in pieces_rows}
+
     # ---- one query for all targets ----
     target_rows = (await db.execute(
         select(ExecutiveTarget).where(
@@ -1542,6 +1552,7 @@ async def get_executive_performance_data(
             "Phone": exe.phone or "",
             "Districts": districts,
             "Total Orders": order_count,
+            "Total Pieces": pieces_by_exec.get(exe.id, 0),
             "Delivered Orders": delivered_count,
             "Delivery Rate %": round(delivered_count / order_count * 100, 2) if order_count else 0,
             "Order Count Target": count_target,
@@ -1842,5 +1853,101 @@ async def get_district_category_report(
             "Distinct Products": int(r.distinct_products),
             "Pieces Purchased": int(r.pieces),
             "Value (₹)": round(float(r.value), 2),
+        })
+    return rows
+
+
+# ── Attendance / Activity Reports ────────────────────────────────────────────────
+
+def _exec_name(user) -> str:
+    if not user:
+        return ""
+    return f"{user.first_name} {user.last_name or ''}".strip()
+
+
+async def get_attendance_report_data(
+    db: AsyncSession,
+    user_id: Optional[uuid.UUID] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+) -> list[dict]:
+    """One row per executive per work day — check-in/out, hours, distance, shops visited.
+
+    Date range is inclusive; a single date (date_from == date_to) gives one day,
+    a month gives that month, any custom span works the same way.
+    """
+    query = (
+        select(WorkLog)
+        .where(WorkLog.is_deleted == False)  # noqa
+        .options(selectinload(WorkLog.user))
+        .order_by(WorkLog.work_date.desc(), WorkLog.checkin_at.desc())
+    )
+    if user_id:
+        query = query.where(WorkLog.user_id == user_id)
+    if date_from:
+        query = query.where(WorkLog.work_date >= date_from)
+    if date_to:
+        query = query.where(WorkLog.work_date <= date_to)
+
+    logs = (await db.execute(query)).scalars().unique().all()
+
+    rows = []
+    for l in logs:
+        rows.append({
+            "Executive": _exec_name(l.user),
+            "Date": str(l.work_date),
+            "Check In": _fmt(l.checkin_at),
+            "Check Out": _fmt(l.checkout_at),
+            "Work Hours": round(l.total_work_minutes / 60, 2) if l.total_work_minutes else 0,
+            "Distance (km)": float(l.total_distance_km or 0),
+            "Shops Visited": l.total_shops_visited or 0,
+            "Status": l.status.value if l.status else "",
+            "Check-in Location": l.checkin_address or "",
+            "Check-out Location": l.checkout_address or "",
+        })
+    return rows
+
+
+async def get_shop_visit_report_data(
+    db: AsyncSession,
+    user_id: Optional[uuid.UUID] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+) -> list[dict]:
+    """One row per shop visit — executive, shop, entry/exit time and duration."""
+    query = (
+        select(ShopVisit)
+        .join(ShopVisit.work_log)
+        .where(WorkLog.is_deleted == False)  # noqa
+        .options(
+            selectinload(ShopVisit.user),
+            selectinload(ShopVisit.work_log),
+            selectinload(ShopVisit.shop).selectinload(Shop.district),
+            selectinload(ShopVisit.shop).selectinload(Shop.taluk),
+        )
+        .order_by(ShopVisit.entry_at.desc())
+    )
+    if user_id:
+        query = query.where(ShopVisit.user_id == user_id)
+    if date_from:
+        query = query.where(WorkLog.work_date >= date_from)
+    if date_to:
+        query = query.where(WorkLog.work_date <= date_to)
+
+    visits = (await db.execute(query)).scalars().unique().all()
+
+    rows = []
+    for v in visits:
+        shop = v.shop
+        rows.append({
+            "Executive": _exec_name(v.user),
+            "Date": str(v.work_log.work_date) if v.work_log else "",
+            "Shop": shop.name if shop else "",
+            "District": shop.district.name if (shop and shop.district) else "",
+            "Taluk": shop.taluk.name if (shop and shop.taluk) else "",
+            "Entry Time": _fmt(v.entry_at),
+            "Exit Time": _fmt(v.exit_at),
+            "Duration (min)": v.duration_minutes if v.duration_minutes is not None else "",
+            "Notes": v.notes or "",
         })
     return rows

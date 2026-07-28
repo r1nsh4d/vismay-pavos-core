@@ -772,3 +772,61 @@ async def district_category_excel(
 ):
     rows = await rd.get_district_category_report(db, date_from=date_from, date_to=date_to, tenant_id=tenant_id)
     return excel_response(generate_excel(rows, "District Categories"), f"district_categories_{_now_str()}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ATTENDANCE / ACTIVITY REPORTS
+# ══════════════════════════════════════════════════════════════════════════════
+# All accept user_id + date_from + date_to. A single date (date_from == date_to)
+# gives one day; a month range gives a month; any custom span works the same.
+
+@router.get("/attendance/excel")
+async def attendance_excel(
+    user_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Daily attendance & activity — check-in/out, hours, distance, shops visited."""
+    rows = await rd.get_attendance_report_data(db, user_id=user_id, date_from=date_from, date_to=date_to)
+    return excel_response(generate_excel(rows, "Attendance"), f"attendance_{_now_str()}")
+
+
+@router.get("/attendance/pdf")
+async def attendance_pdf(
+    user_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Daily attendance & activity as PDF."""
+    rows = await rd.get_attendance_report_data(db, user_id=user_id, date_from=date_from, date_to=date_to)
+    return pdf_response(generate_pdf(rows, "Attendance Report"), f"attendance_{_now_str()}")
+
+
+@router.get("/shop-visits/excel")
+async def shop_visits_excel(
+    user_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Shop entry/exit log — one row per shop visit with entry, exit and duration."""
+    rows = await rd.get_shop_visit_report_data(db, user_id=user_id, date_from=date_from, date_to=date_to)
+    return excel_response(generate_excel(rows, "Shop Visits"), f"shop_visits_{_now_str()}")
+
+
+@router.get("/shop-visits/pdf")
+async def shop_visits_pdf(
+    user_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Shop entry/exit log as PDF."""
+    rows = await rd.get_shop_visit_report_data(db, user_id=user_id, date_from=date_from, date_to=date_to)
+    return pdf_response(generate_pdf(rows, "Shop Visit Report"), f"shop_visits_{_now_str()}")

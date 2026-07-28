@@ -239,6 +239,28 @@ async def get_my_travel_allowance(
     return ResponseModel(data=summary, message="Travel allowance summary fetched")
 
 
+@router.get("/my/activity", response_model=CommonResponse)
+async def get_my_activity(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Own activity over a date range — totals + per-day breakdown with shop visits.
+
+    Defaults to the current month; pass the same date for date_from and date_to
+    to get a single day.
+    """
+    today = datetime.now(tz=None).date()
+    summary = await att_svc.get_activity_summary(
+        db,
+        user_id=current_user.id,
+        date_from=date_from or today.replace(day=1),
+        date_to=date_to or today,
+    )
+    return ResponseModel(data=summary, message="Activity summary fetched")
+
+
 # ── Admin / Manager views ──────────────────────────────────────────────────────
 
 @router.get("/logs", response_model=CommonResponse)
@@ -303,3 +325,22 @@ async def get_travel_allowance(
         month=month or now.month,
     )
     return ResponseModel(data=summary, message="Travel allowance summary fetched")
+
+
+@router.get("/activity/{user_id}", response_model=CommonResponse)
+async def get_activity(
+    user_id: uuid.UUID,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Admin view — one executive's activity over a date range (single day to multiple)."""
+    today = datetime.now(tz=None).date()
+    summary = await att_svc.get_activity_summary(
+        db,
+        user_id=user_id,
+        date_from=date_from or today.replace(day=1),
+        date_to=date_to or today,
+    )
+    return ResponseModel(data=summary, message="Activity summary fetched")
