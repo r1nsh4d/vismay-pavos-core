@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
 
 from reportlab.lib.units import cm, mm
 from reportlab.lib.pagesizes import A4, landscape
@@ -154,13 +155,16 @@ def generate_excel(
         cell.alignment = header_alignment
         cell.border = thin_border
 
-    # Write data rows
+    # Reusable styles — creating fresh style objects per cell is the main slowdown on
+    # large sheets, so build them once and share. Column widths are tracked while writing
+    # to avoid a second full-sheet pass.
+    even_fill = PatternFill(start_color="EBF3FB", end_color="EBF3FB", fill_type="solid")
+    odd_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+    data_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    col_max = [len(str(h)) for h in headers]
+
     for row_idx, row in enumerate(rows, 2):
-        fill = PatternFill(
-            start_color="EBF3FB" if row_idx % 2 == 0 else "FFFFFF",
-            end_color="EBF3FB" if row_idx % 2 == 0 else "FFFFFF",
-            fill_type="solid",
-        )
+        fill = even_fill if row_idx % 2 == 0 else odd_fill
         for col_idx, header in enumerate(headers, 1):
             value = row.get(header, "")
             # Convert None to empty string
@@ -170,20 +174,17 @@ def generate_excel(
             if isinstance(value, str):
                 value = value.upper()
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.alignment = data_align
             cell.border = thin_border
             cell.fill = fill
 
-    # Auto column width
-    for col in ws.columns:
-        max_length = max(
-            (
-                max((len(line) for line in str(cell.value or "").split("\n")), default=0)
-                for cell in col
-            ),
-            default=10,
-        )
-        ws.column_dimensions[col[0].column_letter].width = min(max_length + 4, 45)
+            n = len(value) if isinstance(value, str) else len(str(value))
+            if n > col_max[col_idx - 1]:
+                col_max[col_idx - 1] = n
+
+    # Auto column width (computed above while writing)
+    for i in range(len(headers)):
+        ws.column_dimensions[get_column_letter(i + 1)].width = min(col_max[i] + 4, 45)
 
     # Row height for header
     ws.row_dimensions[1].height = 25
@@ -191,8 +192,10 @@ def generate_excel(
     # Freeze header row
     ws.freeze_panes = "A2"
 
-    # Merge order-level columns across each order's line rows (opt-in)
-    _merge_runs(ws, merge_key, merge_cols)
+    # Cell-merging is intentionally disabled: order-level values repeat on each line row
+    # instead of being visually merged. This keeps output identical at any size, fast to
+    # generate, and friendly to Excel sort/filter/pivot. (merge_key/merge_cols kept for
+    # backward compatibility but no longer applied.)
 
     # Add generated timestamp in a metadata sheet
     meta_ws = wb.create_sheet("Info")
