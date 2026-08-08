@@ -218,6 +218,33 @@ async def get_executive_status_list(
     return result
 
 
+async def get_attendance_overview(db: AsyncSession) -> dict:
+    """Today's attendance roll-up + the per-executive status list.
+
+    `counts` powers the "N agents logged in" header; `executives[]` is the clickable list —
+    click one → call GET /attendance/activity/{userId} for that agent's full activity.
+    """
+    execs = await get_executive_status_list(db)
+    working = sum(1 for e in execs if e["status"] == "working")
+    in_shop = sum(1 for e in execs if e["status"] == "in_shop")
+    checked_out = sum(1 for e in execs if e["status"] == "checked_out")
+    not_checked_in = sum(1 for e in execs if e["status"] == "not_checked_in")
+    active_now = working + in_shop
+
+    return {
+        "counts": {
+            "totalExecutives": len(execs),
+            "activeNow": active_now,           # checked in and still on duty (working + in_shop)
+            "working": working,                # on the move
+            "inShop": in_shop,                 # currently inside a shop
+            "checkedOut": checked_out,         # finished for the day
+            "notCheckedIn": not_checked_in,    # never checked in today
+            "checkedInToday": active_now + checked_out,  # checked in at any point today
+        },
+        "executives": execs,
+    }
+
+
 # ── BI / analytics (read-only) ───────────────────────────────────────────────────
 
 def _created_between(date_from: Optional[date], date_to: Optional[date]) -> list:

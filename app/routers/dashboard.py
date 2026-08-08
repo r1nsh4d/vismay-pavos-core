@@ -65,6 +65,19 @@ async def executive_status(
     return ResponseModel(data=data, message="Executive status fetched")
 
 
+@router.get("/attendance/summary", response_model=CommonResponse)
+async def attendance_summary(
+    db: AsyncSession = Depends(get_db),
+):
+    """Today's attendance roll-up: how many executives are logged in + the clickable agent list.
+
+    `data.counts` for the header (activeNow / checkedOut / notCheckedIn …); `data.executives[]`
+    is the list — click one and fetch GET /attendance/activity/{userId} for that agent's activity.
+    """
+    data = await dash_svc.get_attendance_overview(db)
+    return ResponseModel(data=data, message="Attendance summary fetched")
+
+
 # ── BI / Analytics tab (read-only; date range defaults to today) ─────────────────
 
 @router.get("/top-products", response_model=CommonResponse)
