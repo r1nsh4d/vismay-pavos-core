@@ -4,17 +4,22 @@ Everything here is SELECT-only — no writes, no schema changes — safe for pro
 Visualisation (charts, Google Map) is the frontend's job; these just serve data.
 """
 import uuid
-from datetime import datetime, date, time, timezone
+from datetime import datetime, date, time, timezone, timedelta
 from typing import Optional
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.exceptions import AppException
 from app.models.order import Order, OrderItem, OrderStatus
 from app.models.user import User
 from app.models.role import Role
 from app.models.shop import Shop
+from app.models.product import Product
+from app.models.category import Category
+from app.models.district import District
+from app.models.tenant import Tenant
 from app.models.attendance import WorkLog, ShopVisit
 
 
@@ -211,3 +216,198 @@ async def get_executive_status_list(
             "distanceKmToday": float(log.total_distance_km) if (log and log.total_distance_km) else 0,
         })
     return result
+
+
+# ── BI / analytics (read-only) ───────────────────────────────────────────────────
+
+def _created_between(date_from: Optional[date], date_to: Optional[date]) -> list:
+    f = []
+    if date_from:
+        f.append(Order.created_at >= datetime.combine(date_from, time.min))
+    if date_to:
+        f.append(Order.created_at <= datetime.combine(date_to, time.max))
+    return f
+
+
+async def _totals(db: AsyncSession, date_from, date_to, tenant_id=None) -> dict:
+    filters = [Order.is_deleted == False, *_created_between(date_from, date_to)]  # noqa
+    if tenant_id:
+        filters.append(Order.tenant_id == tenant_id)
+    orders, value = (await db.execute(
+        select(func.count(Order.id), func.coalesce(func.sum(Order.total_amount), 0)).where(*filters)
+    )).one()
+    pieces = (await db.execute(
+        select(func.coalesce(func.sum(OrderItem.count), 0))
+        .select_from(OrderItem).join(Order, OrderItem.order_id == Order.id).where(*filters)
+    )).scalar() or 0
+    return {"orders": orders, "value": round(float(value), 2), "pieces": int(pieces)}
+
+
+async def get_top_products(
+    db: AsyncSession, date_from, date_to, tenant_id=None, limit: int = 10,
+) -> list[dict]:
+    """Top products by order value (with pieces) in the range."""
+    filters = [Order.is_deleted == False, *_created_between(date_from, date_to)]  # noqa
+    if tenant_id:
+        filters.append(Order.tenant_id == tenant_id)
+    value = func.coalesce(func.sum(OrderItem.total_price), 0)
+    rows = (await db.execute(
+        select(
+            Product.id, Product.name, Category.name.label("category"),
+            func.coalesce(func.sum(OrderItem.count), 0), value,
+        )
+        .select_from(OrderItem)
+        .join(Order, OrderItem.order_id == Order.id)
+        .join(Product, OrderItem.product_id == Product.id)
+        .join(Category, Product.category_id == Category.id, isouter=True)
+        .where(*filters)
+        .group_by(Product.id, Product.name, Category.name)
+        .order_by(value.desc())
+        .limit(limit)
+    )).all()
+    return [
+        {"productId": str(pid), "productName": name, "category": cat,
+         "pieces": int(pieces), "value": round(float(val), 2)}
+        for pid, name, cat, pieces, val in rows
+    ]
+
+
+async def get_executive_performance(
+    db: AsyncSession, date_from, date_to, tenant_id=None,
+) -> list[dict]:
+    """Per-executive orders / value / delivered / pieces over a date range (parent orders only)."""
+    filters = [
+        Order.is_deleted == False,          # noqa
+        Order.assigned_executive.isnot(None),
+        Order.parent_order_id == None,       # noqa
+        *_created_between(date_from, date_to),
+    ]
+    if tenant_id:
+        filters.append(Order.tenant_id == tenant_id)
+
+    order_rows = (await db.execute(
+        select(
+            Order.assigned_executive,
+            func.count(Order.id),
+            func.coalesce(func.sum(Order.total_amount), 0),
+            func.coalesce(func.sum(case((Order.status == OrderStatus.delivered, 1), else_=0)), 0),
+        ).where(*filters).group_by(Order.assigned_executive)
+    )).all()
+
+    piece_rows = (await db.execute(
+        select(Order.assigned_executive, func.coalesce(func.sum(OrderItem.count), 0))
+        .select_from(OrderItem).join(Order, OrderItem.order_id == Order.id)
+        .where(*filters).group_by(Order.assigned_executive)
+    )).all()
+    pieces_by = {eid: int(p) for eid, p in piece_rows}
+
+    exec_ids = [eid for eid, *_ in order_rows]
+    names = {}
+    if exec_ids:
+        users = (await db.execute(select(User).where(User.id.in_(exec_ids)))).scalars().all()
+        names = {u.id: f"{u.first_name} {u.last_name or ''}".strip() for u in users}
+
+    result = [
+        {
+            "userId": str(eid),
+            "name": names.get(eid, ""),
+            "totalOrders": int(cnt),
+            "totalValue": round(float(val), 2),
+            "deliveredOrders": int(delivered),
+            "totalPieces": pieces_by.get(eid, 0),
+        }
+        for eid, cnt, val, delivered in order_rows
+    ]
+    result.sort(key=lambda r: r["totalValue"], reverse=True)
+    return result
+
+
+async def get_breakdown(
+    db: AsyncSession, by: str, date_from, date_to, tenant_id=None, limit: int = 50,
+) -> list[dict]:
+    """Sales grouped by a dimension: district | shop | tenant | category.
+
+    value = sum of line-item totals (gross), orders = distinct orders, pieces = total pieces.
+    """
+    filters = [Order.is_deleted == False, *_created_between(date_from, date_to)]  # noqa
+    if tenant_id:
+        filters.append(Order.tenant_id == tenant_id)
+
+    orders = func.count(func.distinct(Order.id)).label("orders")
+    value = func.coalesce(func.sum(OrderItem.total_price), 0).label("value")
+    pieces = func.coalesce(func.sum(OrderItem.count), 0).label("pieces")
+
+    dims = {
+        "district": (District.name, [(Shop, Order.shop_id == Shop.id),
+                                     (District, Shop.district_id == District.id)]),
+        "shop": (Shop.name, [(Shop, Order.shop_id == Shop.id)]),
+        "tenant": (Tenant.name, [(Tenant, Order.tenant_id == Tenant.id)]),
+        "category": (Category.name, [(Product, OrderItem.product_id == Product.id),
+                                     (Category, Product.category_id == Category.id)]),
+    }
+    if by not in dims:
+        raise AppException(status_code=400, detail="by must be one of: district, shop, tenant, category")
+    label_col, joins = dims[by]
+
+    q = (
+        select(label_col.label("label"), orders, value, pieces)
+        .select_from(OrderItem)
+        .join(Order, OrderItem.order_id == Order.id)
+    )
+    for target, onclause in joins:
+        q = q.join(target, onclause)
+    q = q.where(*filters).group_by(label_col).order_by(value.desc()).limit(limit)
+
+    return [
+        {"label": lbl, "orders": int(o), "value": round(float(v), 2), "pieces": int(p)}
+        for lbl, o, v, p in (await db.execute(q)).all()
+    ]
+
+
+async def get_trend(
+    db: AsyncSession, group: str, date_from, date_to, tenant_id=None,
+) -> list[dict]:
+    """Order count + value over time, grouped by day | week | month."""
+    filters = [Order.is_deleted == False, *_created_between(date_from, date_to)]  # noqa
+    if tenant_id:
+        filters.append(Order.tenant_id == tenant_id)
+
+    if group == "day":
+        period = func.date(Order.created_at)
+    elif group == "week":
+        period = func.date_trunc("week", Order.created_at)
+    elif group == "month":
+        period = func.date_trunc("month", Order.created_at)
+    else:
+        raise AppException(status_code=400, detail="group must be one of: day, week, month")
+
+    rows = (await db.execute(
+        select(period.label("p"), func.count(Order.id), func.coalesce(func.sum(Order.total_amount), 0))
+        .where(*filters).group_by(period).order_by(period)
+    )).all()
+    return [{"period": str(p)[:10], "orders": c, "value": round(float(v), 2)} for p, c, v in rows]
+
+
+async def get_period_comparison(
+    db: AsyncSession, date_from: date, date_to: date, tenant_id=None,
+) -> dict:
+    """Current range vs the immediately preceding range of the same length, with % change."""
+    span = (date_to - date_from).days + 1
+    prev_to = date_from - timedelta(days=1)
+    prev_from = prev_to - timedelta(days=span - 1)
+
+    current = await _totals(db, date_from, date_to, tenant_id)
+    previous = await _totals(db, prev_from, prev_to, tenant_id)
+
+    def pct(cur, prev):
+        return round((cur - prev) / prev * 100, 2) if prev else None
+
+    return {
+        "current": {"dateFrom": str(date_from), "dateTo": str(date_to), **current},
+        "previous": {"dateFrom": str(prev_from), "dateTo": str(prev_to), **previous},
+        "change": {
+            "ordersPct": pct(current["orders"], previous["orders"]),
+            "valuePct": pct(current["value"], previous["value"]),
+            "piecesPct": pct(current["pieces"], previous["pieces"]),
+        },
+    }
