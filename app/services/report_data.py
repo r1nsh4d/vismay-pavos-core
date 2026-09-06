@@ -881,6 +881,7 @@ async def get_order_report_data(
         order_head = {
             "Order Number": o.order_number,
             "Bill Number": o.bill_number or "",
+            "Secondary Bill Number": o.secondary_bill_number or "",
             "Type": o.order_type.value,
             "Price Type": o.price_type.value,
             "Shipment Status": o.status.value,

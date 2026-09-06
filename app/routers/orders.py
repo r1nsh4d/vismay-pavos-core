@@ -388,7 +388,8 @@ async def bill_order(
         return ErrorResponseModel(code=400, message="Only estimated orders can be billed", error={})
 
     order = await order_svc.bill_order(
-        db, order, bill_number=body.bill_number, notes=body.notes
+        db, order, bill_number=body.bill_number, notes=body.notes,
+        secondary_bill_number=body.secondary_bill_number,
     )
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
@@ -413,6 +414,7 @@ async def apply_discount(
         discount_flat=discount_in.discount_flat,
         notes=discount_in.notes,
         bill_number=discount_in.bill_number,
+        secondary_bill_number=discount_in.secondary_bill_number,
     )
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
@@ -433,7 +435,10 @@ async def move_to_packing(
         return ErrorResponseModel(code=404, message="Order not found", error={})
     if order.status != OrderStatus.billed:
         return ErrorResponseModel(code=400, message="Only billed orders can move to packing", error={})
-    order = await order_svc.move_to_packing(db, order, notes=body.notes, bill_number=body.bill_number)
+    order = await order_svc.move_to_packing(
+        db, order, notes=body.notes, bill_number=body.bill_number,
+        secondary_bill_number=body.secondary_bill_number,
+    )
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
     return ResponseModel(data=order_svc.serialize_order(order), message="Order moved to packing")
@@ -460,6 +465,7 @@ async def dispatch_order(
         dispatched_box_count=dispatch_in.dispatched_box_count,
         notes=dispatch_in.notes,
         bill_number=dispatch_in.bill_number,
+        secondary_bill_number=dispatch_in.secondary_bill_number,
     )
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
@@ -478,7 +484,10 @@ async def deliver_order(
         return ErrorResponseModel(code=404, message="Order not found", error={})
     if order.status != OrderStatus.dispatched:
         return ErrorResponseModel(code=400, message="Only dispatched orders can be delivered", error={})
-    order = await order_svc.deliver_order(db, order, notes=body.notes, bill_number=body.bill_number)
+    order = await order_svc.deliver_order(
+        db, order, notes=body.notes, bill_number=body.bill_number,
+        secondary_bill_number=body.secondary_bill_number,
+    )
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
     return ResponseModel(data=order_svc.serialize_order(order), message="Order delivered")
@@ -497,7 +506,8 @@ async def update_delivered_at(
     if order.status != OrderStatus.delivered:
         return ErrorResponseModel(code=400, message="Only delivered orders can update delivery date", error={})
     order = await order_svc.update_delivered_at(
-        db, order, body.delivered_at, notes=body.notes, bill_number=body.bill_number
+        db, order, body.delivered_at, notes=body.notes, bill_number=body.bill_number,
+        secondary_bill_number=body.secondary_bill_number,
     )
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)

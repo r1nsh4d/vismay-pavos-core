@@ -49,10 +49,12 @@ class OrderNoteBillUpdate(CamelModel):
     """Note update for post-billing transitions that may also set/update the bill number."""
     notes: Optional[str] = None
     bill_number: Optional[str] = None
+    secondary_bill_number: Optional[str] = None
 
 
 class OrderBillUpdate(CamelModel):
     bill_number: Optional[str] = None
+    secondary_bill_number: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -66,6 +68,7 @@ class OrderDiscountUpdate(CamelModel):
     discount_flat: Optional[float] = None
     notes: Optional[str] = None
     bill_number: Optional[str] = None
+    secondary_bill_number: Optional[str] = None
 
 
 class OrderDispatchInput(CamelModel):
@@ -76,12 +79,14 @@ class OrderDispatchInput(CamelModel):
     dispatched_box_count: int = None
     notes: Optional[str] = None
     bill_number: Optional[str] = None
+    secondary_bill_number: Optional[str] = None
 
 
 class UpdateDeliveredAtInput(CamelModel):
     delivered_at: datetime
     notes: Optional[str] = None
     bill_number: Optional[str] = None
+    secondary_bill_number: Optional[str] = None
 
 
 class UpdateOrderItemInput(CamelModel):
