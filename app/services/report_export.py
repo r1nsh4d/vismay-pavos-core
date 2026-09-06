@@ -1,6 +1,8 @@
 import io
 from datetime import datetime, timezone
 
+from app.core.timezone import fmt_ist
+
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
@@ -84,7 +86,7 @@ def generate_excel(rows: list[dict], sheet_name: str = "Report") -> bytes:
 
     # Add generated timestamp in a metadata sheet
     meta_ws = wb.create_sheet("Info")
-    meta_ws.append(["Generated At", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+    meta_ws.append(["Generated At", fmt_ist(datetime.now(timezone.utc), "%Y-%m-%d %H:%M:%S")])
     meta_ws.append(["Total Rows", len(rows)])
     meta_ws.append(["Sheet", sheet_name])
 
@@ -199,7 +201,7 @@ def generate_excel(
 
     # Add generated timestamp in a metadata sheet
     meta_ws = wb.create_sheet("Info")
-    meta_ws.append(["Generated At", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+    meta_ws.append(["Generated At", fmt_ist(datetime.now(timezone.utc), "%Y-%m-%d %H:%M:%S")])
     meta_ws.append(["Total Rows", len(rows)])
     meta_ws.append(["Sheet", sheet_name])
 
@@ -243,7 +245,7 @@ def generate_pdf(
     # Title + timestamp
     elements.append(Paragraph(title, styles["Title"]))
     elements.append(Paragraph(
-        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Generated: {fmt_ist(datetime.now(timezone.utc), '%Y-%m-%d %H:%M:%S')}",
         subtitle_style,
     ))
     elements.append(Spacer(1, 0.5 * cm))
@@ -311,7 +313,7 @@ def generate_pdf(
         canvas.drawString(
             1 * cm,
             0.75 * cm,
-            f"{title} — {datetime.now().strftime('%Y-%m-%d')}",
+            f"{title} — {fmt_ist(datetime.now(timezone.utc), '%Y-%m-%d')}",
         )
         canvas.restoreState()
 
@@ -337,8 +339,7 @@ def _date(iso, fmt="%d %b %Y"):
     if not iso:
         return "-"
     try:
-        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(
-            timezone.utc).strftime(fmt)
+        return fmt_ist(datetime.fromisoformat(iso.replace("Z", "+00:00")), fmt)
     except Exception:
         return str(iso)
 

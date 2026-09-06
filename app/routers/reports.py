@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
@@ -8,6 +8,7 @@ import io
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.core.timezone import IST
 from app.models.user import User
 from app.models.order import OrderStatus, OrderType
 from app.services import report_data as rd
@@ -33,6 +34,26 @@ def excel_response(data: bytes, filename: str) -> StreamingResponse:
     )
 
 
+def _parse_statuses(val: str | None) -> list[OrderStatus] | None:
+    """Parse a single or comma-separated status string into a list of OrderStatus.
+
+    Unknown values are ignored (not an error), so a filter that includes non-status
+    values still applies the valid ones.
+    """
+    if not val:
+        return None
+    statuses: list[OrderStatus] = []
+    for part in val.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            statuses.append(OrderStatus(part))
+        except ValueError:
+            continue  # ignore anything that isn't a real status
+    return statuses or None
+
+
 def pdf_response(data: bytes, filename: str) -> StreamingResponse:
     return StreamingResponse(
         io.BytesIO(data),
@@ -42,7 +63,7 @@ def pdf_response(data: bytes, filename: str) -> StreamingResponse:
 
 
 def _now_str() -> str:
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
+    return datetime.now(timezone.utc).astimezone(IST).strftime("%Y%m%d_%H%M%S")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -118,7 +139,7 @@ async def executive_wise_summary(
     Channel Intimates: ?tenantId=<intimates-uuid>&year=2026&month=4
     Channel Fashion:   ?tenantId=<fashion-uuid>&year=2026&month=4
     """
-    now = datetime.utcnow()
+    now = datetime.now(IST)
     data = await get_executive_wise_report(
         db,
         year=year or now.year,
@@ -147,7 +168,7 @@ async def executive_wise_excel(
     Channel Intimates: ?tenantId=<intimates-uuid>&title=ESSENTIALS NORMAL ORDER STATISTICS
     Channel Fashion:   ?tenantId=<fashion-uuid>&title=FASHION ORDER STATISTICS
     """
-    now = datetime.utcnow()
+    now = datetime.now(IST)
     report = await get_executive_wise_report(
         db,
         year=year or now.year,
@@ -524,7 +545,7 @@ async def executive_summary(
     current_user: User = Depends(get_current_user),
 ):
     """Overall executive performance summary for a month."""
-    now = datetime.utcnow()
+    now = datetime.now(IST)
     data = await rd.get_executive_summary(
         db,
         year=year or now.year,
@@ -541,11 +562,19 @@ async def executive_performance_excel(
     tenant_id: uuid.UUID | None = None,
     district_id: uuid.UUID | None = None,
     state_id: uuid.UUID | None = None,
+    status: str | None = Query(
+        default=None,
+        description="Order status — single value or comma-separated for multiple "
+                    "(e.g. placed,verified,delivered). Restricts both the orders counted "
+                    "and the status/category-status columns shown. Omit for all statuses "
+                    "except rejected/returned/cancelled.",
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Download executive performance vs targets as Excel."""
-    now = datetime.utcnow()
+    """Download executive-wise order count & value report (by status, category, and
+    category x status) plus performance vs targets, as Excel."""
+    now = datetime.now(IST)
     rows = await rd.get_executive_performance_data(
         db,
         year=year or now.year,
@@ -553,6 +582,7 @@ async def executive_performance_excel(
         tenant_id=tenant_id,
         district_id=district_id,
         state_id=state_id,
+        statuses=_parse_statuses(status),
     )
     return excel_response(
         generate_excel(rows, "Executive Performance"),
@@ -567,11 +597,15 @@ async def executive_performance_pdf(
     tenant_id: uuid.UUID | None = None,
     district_id: uuid.UUID | None = None,
     state_id: uuid.UUID | None = None,
+    status: str | None = Query(
+        default=None,
+        description="Order status — single value or comma-separated for multiple.",
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Download executive performance report as PDF."""
-    now = datetime.utcnow()
+    now = datetime.now(IST)
     rows = await rd.get_executive_performance_data(
         db,
         year=year or now.year,
@@ -579,6 +613,7 @@ async def executive_performance_pdf(
         tenant_id=tenant_id,
         district_id=district_id,
         state_id=state_id,
+        statuses=_parse_statuses(status),
     )
     return pdf_response(
         generate_pdf(rows, "Executive Performance Report"),

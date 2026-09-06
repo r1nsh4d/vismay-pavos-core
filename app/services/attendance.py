@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.models.attendance import WorkLog, LocationEvent, ShopVisit, LocationEventType, AttendanceStatus
 from app.models.shop import Shop
 from app.core.exceptions import AppException
+from app.core.timezone import IST
 from app.config import settings
 
 
@@ -17,7 +18,11 @@ def _now():
 
 
 def _today():
-    return datetime.now(timezone.utc).date()
+    # The "work day" an executive's check-in belongs to is a calendar-day concept and
+    # this app operates in India only, so it must be today's date in IST — not UTC.
+    # Using UTC here would misfile any check-in made between 00:00-05:29 IST (which is
+    # still "yesterday" in UTC) under the wrong work_date.
+    return datetime.now(IST).date()
 
 
 def _aware(dt):
@@ -75,12 +80,14 @@ async def _calculate_total_distance(db: AsyncSession, work_log_id: uuid.UUID) ->
          - hops that fall entirely inside a shop visit (standstill drift).
     4. Multiply by TA_ROAD_FACTOR to approximate road distance vs crow-flies.
     """
+    # Every event type carries a real GPS fix at that moment — not just location_ping.
+    # shop_entry/shop_exit in particular mark the executive's position at each shop and
+    # are the main waypoints of the day; excluding them (as a location_ping-only filter
+    # would) leaves just the checkin/checkout points, which understates — or on a
+    # same-place checkin/checkout, zeroes out — real travel between shops.
     result = await db.execute(
         select(LocationEvent)
-        .where(
-            LocationEvent.work_log_id == work_log_id,
-            LocationEvent.event_type == LocationEventType.location_ping,
-        )
+        .where(LocationEvent.work_log_id == work_log_id)
         .order_by(LocationEvent.recorded_at.asc())
     )
     pings = result.scalars().all()
@@ -248,10 +255,9 @@ async def check_out(
 
     await db.flush()
 
-    total_distance = await _calculate_total_distance(db, work_log.id)
-    work_log.total_distance_km = total_distance
-
-    # Close any open shop visits
+    # Close any open shop visits BEFORE computing distance — _calculate_total_distance
+    # treats a visit with no exit_at as "inside the shop" indefinitely, so leaving one
+    # open would wrongly swallow every travel segment for the rest of the day.
     open_visits = (await db.execute(
         select(ShopVisit).where(
             ShopVisit.work_log_id == work_log.id,
@@ -265,6 +271,11 @@ async def check_out(
         if entry_time.tzinfo is None:
             entry_time = entry_time.replace(tzinfo=timezone.utc)
         visit.duration_minutes = int((now - entry_time).total_seconds() / 60)
+
+    await db.flush()
+
+    total_distance = await _calculate_total_distance(db, work_log.id)
+    work_log.total_distance_km = total_distance
 
     # Count total shops
     shop_count = (await db.execute(

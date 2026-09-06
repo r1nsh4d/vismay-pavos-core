@@ -1,8 +1,8 @@
 import uuid
 from collections import defaultdict
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Optional
-from sqlalchemy import select, func, extract
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -21,15 +21,22 @@ from app.models.category import Category
 from app.models.role import Role
 from app.models.tenant import Tenant
 from app.services.orders import _distributor_name
+from app.core.timezone import to_ist, fmt_ist, ist_day_start_utc, ist_day_end_utc, ist_month_bounds_utc
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+#
+# All timestamps are stored in UTC (`timestamptz` columns). This app runs in India
+# only, so date-range filters coming in as plain dates (date_from/date_to, year/month)
+# are always meant as IST calendar dates — they're converted to their UTC instants
+# here before hitting the DB, and every displayed timestamp is converted back to IST
+# at the point it's formatted (see _fmt / _time_only below).
 
 def _date_filters(query, model, date_from, date_to):
     if date_from:
-        query = query.where(model.created_at >= datetime.combine(date_from, datetime.min.time()))
+        query = query.where(model.created_at >= ist_day_start_utc(date_from))
     if date_to:
-        query = query.where(model.created_at <= datetime.combine(date_to, datetime.max.time()))
+        query = query.where(model.created_at <= ist_day_end_utc(date_to))
     return query
 
 
@@ -56,9 +63,9 @@ async def get_order_summary(
     if tenant_id:
         base.append(Order.tenant_id == tenant_id)
     if date_from:
-        base.append(Order.created_at >= datetime.combine(date_from, datetime.min.time()))
+        base.append(Order.created_at >= ist_day_start_utc(date_from))
     if date_to:
-        base.append(Order.created_at <= datetime.combine(date_to, datetime.max.time()))
+        base.append(Order.created_at <= ist_day_end_utc(date_to))
 
     total_q = await db.execute(
         select(func.count(Order.id), func.coalesce(func.sum(Order.total_amount), 0)).where(*base)
@@ -131,9 +138,9 @@ async def get_order_consolidation_report(
     if tenant_id:
         base_filters.append(Order.tenant_id == tenant_id)
     if date_from:
-        base_filters.append(Order.created_at >= datetime.combine(date_from, datetime.min.time()))
+        base_filters.append(Order.created_at >= ist_day_start_utc(date_from))
     if date_to:
-        base_filters.append(Order.created_at <= datetime.combine(date_to, datetime.max.time()))
+        base_filters.append(Order.created_at <= ist_day_end_utc(date_to))
 
     async def get_stats_for_statuses(status_list: list) -> tuple[dict, int]:
         if not status_list:
@@ -215,7 +222,7 @@ async def get_order_consolidation_report(
         tenant_name = tenant.name if tenant else ""
 
     return {
-        "generatedAt": datetime.now().strftime("%d-%m-%Y"),
+        "generatedAt": fmt_ist(datetime.now(timezone.utc), "%d-%m-%Y"),
         "tenantName": tenant_name,
         "categories": [c.name for c in categories],
         "rows": report_rows,
@@ -442,12 +449,13 @@ async def get_executive_wise_report(
 
     date_filters = []
     if date_from:
-        date_filters.append(Order.created_at >= datetime.combine(date_from, datetime.min.time()))
+        date_filters.append(Order.created_at >= ist_day_start_utc(date_from))
     if date_to:
-        date_filters.append(Order.created_at <= datetime.combine(date_to, datetime.max.time()))
+        date_filters.append(Order.created_at <= ist_day_end_utc(date_to))
     if not date_from and not date_to:
-        date_filters.append(extract("year", Order.created_at) == year)
-        date_filters.append(extract("month", Order.created_at) == month)
+        month_start, month_end = ist_month_bounds_utc(year, month)
+        date_filters.append(Order.created_at >= month_start)
+        date_filters.append(Order.created_at < month_end)
 
     exec_rows = []
     cat_totals = {str(c.id): {"target": 0, "order": 0, "hold": 0, "acvmt": 0} for c in categories}
@@ -559,7 +567,7 @@ async def get_executive_wise_report(
         tenant_name = tenant.name if tenant else ""
 
     return {
-        "generatedAt": datetime.now().strftime("%d-%m-%Y"),
+        "generatedAt": fmt_ist(datetime.now(timezone.utc), "%d-%m-%Y"),
         "tenantName": tenant_name,
         "year": year,
         "month": month,
@@ -805,8 +813,8 @@ def _tat_days(start, end) -> str | float:
 
 
 def _fmt(dt) -> str:
-    """Format a status timestamp, blank if not yet reached."""
-    return dt.strftime("%Y-%m-%d %H:%M") if dt else ""
+    """Format a status timestamp as IST, blank if not yet reached."""
+    return fmt_ist(dt)
 
 
 async def get_order_report_data(
@@ -915,7 +923,7 @@ async def get_order_report_data(
             "Rejected At": _fmt(o.rejected_at),
             "Returned At": _fmt(o.returned_at),
             # ── Summary dates ──
-            "Booking Date": booking_dt.strftime("%Y-%m-%d") if booking_dt else "",
+            "Booking Date": fmt_ist(booking_dt, "%Y-%m-%d"),
             "Delivery Date": _fmt(o.delivered_at),
             # ── Turn-around times ──
             # Warehouse TAT: billed → dispatched (dwell time inside the warehouse).
@@ -1201,11 +1209,11 @@ async def get_product_report_data(
         .group_by(OrderItem.product_id)
     )
     if date_from:
-        df = datetime.combine(date_from, datetime.min.time())
+        df = ist_day_start_utc(date_from)
         status_q = status_q.where(Order.created_at >= df)
         on_q = on_q.where(Order.created_at >= df)
     if date_to:
-        dt = datetime.combine(date_to, datetime.max.time())
+        dt = ist_day_end_utc(date_to)
         status_q = status_q.where(Order.created_at <= dt)
         on_q = on_q.where(Order.created_at <= dt)
 
@@ -1324,7 +1332,7 @@ async def get_shop_report_data(
             "Active": "Yes" if s.is_active else "No",
             "Total Orders": count,
             "Total Value (₹)": float(value),
-            "Last Order Date": last_order_at.strftime("%Y-%m-%d") if last_order_at else "",
+            "Last Order Date": fmt_ist(last_order_at, "%Y-%m-%d"),
         })
     return rows
 
@@ -1418,7 +1426,7 @@ async def get_user_report_data(
             "States": states,
             "Active": "Yes" if u.is_active else "No",
             "Verified": "Yes" if u.is_verified else "No",
-            "Created": u.created_at.strftime("%Y-%m-%d"),
+            "Created": fmt_ist(u.created_at, "%Y-%m-%d"),
         })
     return rows
 
@@ -1432,13 +1440,24 @@ async def get_executive_performance_data(
     tenant_id: Optional[uuid.UUID] = None,
     district_id: Optional[uuid.UUID] = None,
     state_id: Optional[uuid.UUID] = None,
+    statuses: Optional[list[OrderStatus]] = None,
 ) -> list[dict]:
-    # Month window as a half-open range (index-friendly, no extract()).
-    period_start = datetime(year, month, 1)
-    period_end = datetime(year + 1, 1, 1) if month == 12 else datetime(year, month + 1, 1)
+    """
+    One row per executive, with:
+      - overall totals + target achievement (as before)
+      - order count & value broken out by status
+      - order count & value broken out by category
+      - order count & value broken out by category x status
+
+    `statuses`: when given, restricts the report to only these statuses (both the
+    orders counted and the status/category-status columns shown). When omitted,
+    all statuses except rejected/returned/cancelled are used, as before.
+    """
+    # Month window as a half-open UTC range, reckoned by the IST calendar month.
+    period_start, period_end = ist_month_bounds_utc(year, month)
 
     excluded = [OrderStatus.rejected, OrderStatus.returned, OrderStatus.cancelled]
-    status_columns = [s for s in OrderStatus if s not in excluded]  # stable column set
+    status_columns = list(statuses) if statuses else [s for s in OrderStatus if s not in excluded]
 
     # ---- executives ----
     exec_query = (
@@ -1484,7 +1503,7 @@ async def get_executive_performance_data(
     order_filters = [
         Order.assigned_executive.in_(exec_ids),
         Order.is_deleted == False,
-        Order.status.not_in(excluded),
+        Order.status.in_(statuses) if statuses else Order.status.not_in(excluded),
         Order.parent_order_id == None,  # noqa
         Order.created_at >= period_start,
         Order.created_at < period_end,
@@ -1516,6 +1535,50 @@ async def get_executive_performance_data(
     )).all()
     pieces_by_exec = {exec_id: int(p) for exec_id, p in pieces_rows}
 
+    # ---- categories (tenant-scoped if given, else all active) ----
+    if tenant_id:
+        categories = await _get_tenant_categories(db, tenant_id)
+    else:
+        categories = (await db.execute(
+            select(Category).where(
+                Category.is_deleted == False,
+                Category.is_active == True,
+            ).order_by(Category.name)
+        )).scalars().all()
+
+    # ---- one grouped query for category x status order counts/values ----
+    # Order count = distinct orders touching that category; value = sum of the
+    # order-item lines in that category (not the whole order's total, since an
+    # order can span multiple categories).
+    cat_status_rows = (await db.execute(
+        select(
+            Order.assigned_executive,
+            Product.category_id,
+            Order.status,
+            func.count(func.distinct(Order.id)),
+            func.coalesce(func.sum(OrderItem.total_price), 0),
+        )
+        .select_from(Order)
+        .join(OrderItem, OrderItem.order_id == Order.id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(*order_filters)
+        .group_by(Order.assigned_executive, Product.category_id, Order.status)
+    )).all()
+
+    # exec_id -> category_id -> status -> (count, value)
+    cat_status_by_exec: dict[uuid.UUID, dict] = defaultdict(dict)
+    # exec_id -> category_id -> [count, value]  (safe to sum across status: an
+    # order has exactly one status, so the per-status distinct-order sets for a
+    # given category never overlap)
+    cat_totals_by_exec: dict[uuid.UUID, dict] = defaultdict(lambda: defaultdict(lambda: [0, 0.0]))
+
+    for exec_id, category_id, status, cnt, value in cat_status_rows:
+        value = float(value)
+        cat_status_by_exec[exec_id].setdefault(category_id, {})[status] = (cnt, value)
+        totals = cat_totals_by_exec[exec_id][category_id]
+        totals[0] += cnt
+        totals[1] += value
+
     # ---- one query for all targets ----
     target_rows = (await db.execute(
         select(ExecutiveTarget).where(
@@ -1528,6 +1591,9 @@ async def get_executive_performance_data(
     targets_by_exec: dict[uuid.UUID, dict] = defaultdict(dict)
     for t in target_rows:
         targets_by_exec[t.user_id][t.target_type] = float(t.target_value)
+
+    def _label(s: OrderStatus) -> str:
+        return s.value.replace("_", " ").title()
 
     # ---- build rows ----
     rows = []
@@ -1547,21 +1613,48 @@ async def get_executive_performance_data(
             ud.district.name for ud in exe.user_districts if ud.district
         )
 
+        # count & value by status
+        status_block = {}
+        for s in status_columns:
+            cnt, val = per_status.get(s, (0, 0.0))
+            status_block[f"{_label(s)} - Orders"] = cnt
+            status_block[f"{_label(s)} - Value (₹)"] = round(val, 2)
+
+        # count & value by category
+        exec_cat_totals = cat_totals_by_exec.get(exe.id, {})
+        category_block = {}
+        for cat in categories:
+            cnt, val = exec_cat_totals.get(cat.id, (0, 0.0))
+            category_block[f"{cat.name} - Orders"] = cnt
+            category_block[f"{cat.name} - Value (₹)"] = round(val, 2)
+
+        # count & value by category x status
+        exec_cat_status = cat_status_by_exec.get(exe.id, {})
+        category_status_block = {}
+        for cat in categories:
+            per_cat_status = exec_cat_status.get(cat.id, {})
+            for s in status_columns:
+                cnt, val = per_cat_status.get(s, (0, 0.0))
+                category_status_block[f"{cat.name} - {_label(s)} - Orders"] = cnt
+                category_status_block[f"{cat.name} - {_label(s)} - Value (₹)"] = round(val, 2)
+
         rows.append({
             "Executive": f"{exe.first_name} {exe.last_name}".strip(),
             "Username": exe.username,
             "Phone": exe.phone or "",
             "Districts": districts,
             "Total Orders": order_count,
+            "Total Order Value (₹)": round(order_value, 2),
             "Total Pieces": pieces_by_exec.get(exe.id, 0),
             "Delivered Orders": delivered_count,
             "Delivery Rate %": round(delivered_count / order_count * 100, 2) if order_count else 0,
             "Order Count Target": count_target,
             "Count Achievement %": round(order_count / count_target * 100, 2) if count_target else "N/A",
-            "Order Value (₹)": order_value,
             "Value Target (₹)": value_target,
             "Value Achievement %": round(order_value / value_target * 100, 2) if value_target else "N/A",
-            **{f"Status - {s.value}": status_counts[s] for s in status_columns},
+            **status_block,
+            **category_block,
+            **category_status_block,
         })
 
     return rows
@@ -1581,14 +1674,15 @@ async def get_executive_summary(
     )).scalar() or 0
 
     excluded = [OrderStatus.rejected, OrderStatus.returned, OrderStatus.cancelled]
+    month_start, month_end = ist_month_bounds_utc(year, month)
 
     total_orders = (await db.execute(
         select(func.count(Order.id)).where(
             Order.is_deleted == False,
             Order.status.not_in(excluded),
             Order.parent_order_id == None,  # noqa
-            extract("year", Order.created_at) == year,
-            extract("month", Order.created_at) == month,
+            Order.created_at >= month_start,
+            Order.created_at < month_end,
         )
     )).scalar() or 0
 
@@ -1597,8 +1691,8 @@ async def get_executive_summary(
             Order.is_deleted == False,
             Order.status.not_in(excluded),
             Order.parent_order_id == None,  # noqa
-            extract("year", Order.created_at) == year,
-            extract("month", Order.created_at) == month,
+            Order.created_at >= month_start,
+            Order.created_at < month_end,
         )
     )).scalar() or 0)
 
@@ -1649,9 +1743,9 @@ async def get_distributor_report_data(
             Order.parent_order_id == None,  # noqa
         ]
         if date_from:
-            base.append(Order.created_at >= datetime.combine(date_from, datetime.min.time()))
+            base.append(Order.created_at >= ist_day_start_utc(date_from))
         if date_to:
-            base.append(Order.created_at <= datetime.combine(date_to, datetime.max.time()))
+            base.append(Order.created_at <= ist_day_end_utc(date_to))
 
         count, value = (await db.execute(
             select(func.count(Order.id), func.coalesce(func.sum(Order.total_amount), 0)).where(*base)
@@ -1703,9 +1797,9 @@ async def get_returns_report_data(
     )
 
     if date_from:
-        query = query.where(OrderReturn.created_at >= datetime.combine(date_from, datetime.min.time()))
+        query = query.where(OrderReturn.created_at >= ist_day_start_utc(date_from))
     if date_to:
-        query = query.where(OrderReturn.created_at <= datetime.combine(date_to, datetime.max.time()))
+        query = query.where(OrderReturn.created_at <= ist_day_end_utc(date_to))
     if product_id:
         query = query.where(OrderReturn.product_id == product_id)
 
@@ -1715,7 +1809,7 @@ async def get_returns_report_data(
     rows = []
     for r in returns:
         rows.append({
-            "Date": r.created_at.strftime("%Y-%m-%d"),
+            "Date": fmt_ist(r.created_at, "%Y-%m-%d"),
             "Order Number": r.order.order_number if r.order else "",
             "Product": r.product.name if r.product else "",
             "Variant Size": r.variant.size if r.variant else "",
@@ -1745,9 +1839,9 @@ async def get_executive_sales_summary(
     if tenant_id:
         filters.append(Order.tenant_id == tenant_id)
     if date_from:
-        filters.append(Order.created_at >= datetime.combine(date_from, datetime.min.time()))
+        filters.append(Order.created_at >= ist_day_start_utc(date_from))
     if date_to:
-        filters.append(Order.created_at <= datetime.combine(date_to, datetime.max.time()))
+        filters.append(Order.created_at <= ist_day_end_utc(date_to))
 
     # pieces from item join
     pieces_q = (
@@ -1824,9 +1918,9 @@ async def get_district_category_report(
     if tenant_id:
         filters.append(Order.tenant_id == tenant_id)
     if date_from:
-        filters.append(Order.created_at >= datetime.combine(date_from, datetime.min.time()))
+        filters.append(Order.created_at >= ist_day_start_utc(date_from))
     if date_to:
-        filters.append(Order.created_at <= datetime.combine(date_to, datetime.max.time()))
+        filters.append(Order.created_at <= ist_day_end_utc(date_to))
 
     q = (
         select(
@@ -1866,6 +1960,20 @@ def _exec_name(user) -> str:
     return f"{user.first_name} {user.last_name or ''}".strip()
 
 
+def _time_only(dt) -> str:
+    """Format just the IST clock time (HH:MM), blank if not set."""
+    return fmt_ist(dt, "%H:%M")
+
+
+def _shop_visit_history(visits: list["ShopVisit"]) -> str:
+    """Render a day's shop visits as 'Shop1(10:05)->Shop2(10:45)->...', in entry order."""
+    ordered = sorted((v for v in visits if v.entry_at), key=lambda v: v.entry_at)
+    return "->".join(
+        f"{v.shop.name if v.shop else 'Unknown'}({_time_only(v.entry_at)})"
+        for v in ordered
+    )
+
+
 async def get_attendance_report_data(
     db: AsyncSession,
     user_id: Optional[uuid.UUID] = None,
@@ -1880,7 +1988,10 @@ async def get_attendance_report_data(
     query = (
         select(WorkLog)
         .where(WorkLog.is_deleted == False)  # noqa
-        .options(selectinload(WorkLog.user))
+        .options(
+            selectinload(WorkLog.user),
+            selectinload(WorkLog.shop_visits).selectinload(ShopVisit.shop),
+        )
         .order_by(WorkLog.work_date.desc(), WorkLog.checkin_at.desc())
     )
     if user_id:
@@ -1902,6 +2013,7 @@ async def get_attendance_report_data(
             "Work Hours": round(l.total_work_minutes / 60, 2) if l.total_work_minutes else 0,
             "Distance (km)": float(l.total_distance_km or 0),
             "Shops Visited": l.total_shops_visited or 0,
+            "Shop Visit History": _shop_visit_history(l.shop_visits),
             "Status": l.status.value if l.status else "",
             "Check-in Location": l.checkin_address or "",
             "Check-out Location": l.checkout_address or "",
