@@ -22,6 +22,7 @@ from app.models.category import Category
 from app.models.district import District
 from app.models.tenant import Tenant
 from app.models.attendance import WorkLog, ShopVisit, LocationEvent, LocationEventType
+from app.services.attendance import _haversine_km
 
 
 # ── Order dashboard ──────────────────────────────────────────────────────────────
@@ -834,23 +835,31 @@ async def get_executive_route(db: AsyncSession, user_id: uuid.UUID, work_date: d
             "summary": {"distanceKm": 0, "workHours": 0, "shopsVisited": 0, "pointCount": 0},
         }
 
-    route_types = (
-        LocationEventType.location_ping,
-        LocationEventType.checkin,
-        LocationEventType.checkout,
-    )
+    # Every recorded GPS fix for the day, in time order — check-in, the ~5-min pings, shop
+    # entry/exit and check-out. This is the exact point set the distance is built from, so
+    # the map polyline and the reported distance stay consistent and verifiable.
     route = [
         {
             "lat": float(e.latitude),
             "lng": float(e.longitude),
             "at": e.recorded_at.isoformat() if e.recorded_at else None,
             "type": e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type),
+            "accuracy": float(e.accuracy) if e.accuracy is not None else None,
         }
         for e in sorted(
-            (e for e in log.location_events if e.event_type in route_types),
+            (e for e in log.location_events if e.latitude is not None and e.longitude is not None),
             key=lambda x: x.recorded_at,
         )
     ]
+    ping_count = sum(1 for e in log.location_events if e.event_type == LocationEventType.location_ping)
+
+    # Straight-line sum of the plotted points — the transparent baseline. The stored
+    # distanceKm is this cleaned + scaled by the road factor, so a manager can sanity-check
+    # the number against the points on the map.
+    straight_m = sum(
+        _haversine_km(route[i - 1]["lat"], route[i - 1]["lng"], route[i]["lat"], route[i]["lng"]) * 1000.0
+        for i in range(1, len(route))
+    )
 
     shop_visits = [
         {
@@ -881,8 +890,10 @@ async def get_executive_route(db: AsyncSession, user_id: uuid.UUID, work_date: d
         "shopVisits": shop_visits,
         "summary": {
             "distanceKm": float(log.total_distance_km) if log.total_distance_km is not None else 0,
+            "straightLineKm": round(straight_m / 1000.0, 2),  # raw sum of plotted points (no road factor)
             "workHours": round(log.total_work_minutes / 60, 2) if log.total_work_minutes else 0,
             "shopsVisited": log.total_shops_visited or 0,
-            "pointCount": len(route),
+            "pointCount": len(route),   # total GPS fixes plotted
+            "pingCount": ping_count,    # of those, how many were 5-min location pings
         },
     }

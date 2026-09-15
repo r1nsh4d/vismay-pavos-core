@@ -2,12 +2,11 @@ import io
 import re
 from datetime import datetime, timezone, timedelta
 
-# Reports render in India Standard Time (UTC+5:30, no DST — a fixed offset is exact).
-IST = timezone(timedelta(hours=5, minutes=30))
-
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
+
+from app.core.timezone import IST  # reports render in IST (UTC+5:30)
 
 # Recognise an =HYPERLINK("url", "label") cell so the PDF can render it as a real link.
 _HYPERLINK_RE = re.compile(r'^=HYPERLINK\("([^"]+)",\s*"(.*)"\)\s*$')

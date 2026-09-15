@@ -10,6 +10,12 @@ Run once inside the app container:
     docker exec vismay_app python scripts/backfill_distance.py
 """
 import asyncio
+import os
+import sys
+
+# Make `app` importable when run as `python scripts/backfill_distance.py` (adds the repo
+# root to the path, since Python otherwise only puts the scripts/ folder on sys.path).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import select
 

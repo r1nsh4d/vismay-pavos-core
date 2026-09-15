@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.models.attendance import WorkLog, LocationEvent, ShopVisit, LocationEventType, AttendanceStatus
 from app.models.shop import Shop
 from app.core.exceptions import AppException
+from app.core.timezone import IST
 from app.config import settings
 
 
@@ -17,7 +18,11 @@ def _now():
 
 
 def _today():
-    return datetime.now(timezone.utc).date()
+    # The "work day" an executive's check-in belongs to is a calendar-day concept and
+    # this app operates in India only, so it must be today's date in IST — not UTC.
+    # Using UTC here would misfile any check-in made between 00:00-05:29 IST (which is
+    # still "yesterday" in UTC) under the wrong work_date.
+    return datetime.now(IST).date()
 
 
 def _aware(dt):
@@ -75,12 +80,14 @@ async def _calculate_total_distance(db: AsyncSession, work_log_id: uuid.UUID) ->
          - hops that fall entirely inside a shop visit (standstill drift).
     4. Multiply by TA_ROAD_FACTOR to approximate road distance vs crow-flies.
     """
+    # Every event type carries a real GPS fix at that moment — not just location_ping.
+    # shop_entry/shop_exit in particular mark the executive's position at each shop and
+    # are the main waypoints of the day; excluding them (as a location_ping-only filter
+    # would) leaves just the checkin/checkout points, which understates — or on a
+    # same-place checkin/checkout, zeroes out — real travel between shops.
     result = await db.execute(
         select(LocationEvent)
-        .where(
-            LocationEvent.work_log_id == work_log_id,
-            LocationEvent.event_type == LocationEventType.location_ping,
-        )
+        .where(LocationEvent.work_log_id == work_log_id)
         .order_by(LocationEvent.recorded_at.asc())
     )
     pings = result.scalars().all()
@@ -93,12 +100,15 @@ async def _calculate_total_distance(db: AsyncSession, work_log_id: uuid.UUID) ->
         )).scalars().all()
         intervals = [(_aware(v.entry_at), _aware(v.exit_at)) for v in visits if v.entry_at]
 
-    def _inside_shop(ts) -> bool:
+    def _shop_of(ts):
+        """Index of the shop-visit window containing `ts`, or None if between/outside visits.
+        Used to skip drift *within one shop stay* — never the travel between two shops
+        (a shop_exit → next shop_entry segment is real travel and must be counted)."""
         ts = _aware(ts)
-        for start, end in intervals:
+        for idx, (start, end) in enumerate(intervals):
             if start and ts >= start and (end is None or ts <= end):
-                return True
-        return False
+                return idx
+        return None
 
     max_acc = settings.TA_GPS_MAX_ACCURACY_M
     kept = [p for p in pings if p.accuracy is None or float(p.accuracy) <= max_acc]
@@ -107,20 +117,31 @@ async def _calculate_total_distance(db: AsyncSession, work_log_id: uuid.UUID) ->
     if len(kept) < 2 and len(pings) >= 2:
         kept = list(pings)
 
-    total_m = 0.0
-    for i in range(1, len(kept)):
-        a, b = kept[i - 1], kept[i]
-        seg_m = _haversine_km(
+    def _seg_m(a, b) -> float:
+        return _haversine_km(
             float(a.latitude), float(a.longitude),
             float(b.latitude), float(b.longitude),
         ) * 1000.0
 
+    # Plain point-to-point total over every kept ping — the transparent baseline the
+    # distance is derived from (== summing the map polyline).
+    raw_m = sum(_seg_m(kept[i - 1], kept[i]) for i in range(1, len(kept)))
+
+    # Noise-cleaned total: drop sub-threshold jitter and drift while parked inside a shop.
+    cleaned_m = 0.0
+    for i in range(1, len(kept)):
+        a, b = kept[i - 1], kept[i]
+        seg_m = _seg_m(a, b)
         if seg_m < settings.TA_MIN_SEGMENT_M:
             continue  # jitter / standing still
-        if _inside_shop(a.recorded_at) and _inside_shop(b.recorded_at):
-            continue  # drift while parked inside a shop
+        sa = _shop_of(a.recorded_at)
+        if sa is not None and sa == _shop_of(b.recorded_at):
+            continue  # both points inside the SAME shop visit → parked drift, not travel
+        cleaned_m += seg_m
 
-        total_m += seg_m
+    # Safety net: the noise filters must never wipe out a day that actually moved.
+    # If cleaning zeroed a day that has real point-to-point distance, keep the raw total.
+    total_m = cleaned_m if cleaned_m > 0 else raw_m
 
     total_km = (total_m / 1000.0) * settings.TA_ROAD_FACTOR
     return round(total_km, 2)
@@ -252,10 +273,9 @@ async def check_out(
 
     await db.flush()
 
-    total_distance = await _calculate_total_distance(db, work_log.id)
-    work_log.total_distance_km = total_distance
-
-    # Close any open shop visits
+    # Close any open shop visits BEFORE computing distance — _calculate_total_distance
+    # treats a visit with no exit_at as "inside the shop" indefinitely, so leaving one
+    # open would wrongly swallow every travel segment for the rest of the day.
     open_visits = (await db.execute(
         select(ShopVisit).where(
             ShopVisit.work_log_id == work_log.id,
@@ -269,6 +289,11 @@ async def check_out(
         if entry_time.tzinfo is None:
             entry_time = entry_time.replace(tzinfo=timezone.utc)
         visit.duration_minutes = int((now - entry_time).total_seconds() / 60)
+
+    await db.flush()
+
+    total_distance = await _calculate_total_distance(db, work_log.id)
+    work_log.total_distance_km = total_distance
 
     # Count total shops
     shop_count = (await db.execute(
@@ -328,6 +353,12 @@ async def record_location_ping(
         recorded_at=ping_time,
     )
     db.add(event)
+    await db.flush()
+
+    # Keep the day's distance current on every ping — computed from the total pings so far —
+    # so live views (KPI dashboard, map) show the real travelled distance without waiting
+    # for checkout. Checkout recomputes it a final time.
+    work_log.total_distance_km = await _calculate_total_distance(db, work_log.id)
     await db.flush()
     return event
 
