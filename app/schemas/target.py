@@ -15,8 +15,8 @@ class TargetCreate(CamelModel):
     notes: Optional[str] = None
 
     def validate_category(self):
-        if self.target_type == TargetType.category_quantity and not self.category_id:
-            raise ValueError("category_id is required for category_quantity target type")
+        if self.target_type in (TargetType.category_quantity, TargetType.category_value) and not self.category_id:
+            raise ValueError("category_id is required for category targets")
 
 
 class TargetResponse(CamelModel):

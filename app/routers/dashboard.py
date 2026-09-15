@@ -8,6 +8,8 @@ from app.dependencies import require_roles
 from app.schemas.common import CommonResponse, ResponseModel
 from app.models.order import OrderStatus
 from app.services import dashboard as dash_svc
+from app.services.report_export import generate_excel
+from app.routers.reports import excel_response, _now_str
 
 # Admin dashboard — read-only. Restricted to management roles.
 router = APIRouter(
@@ -147,3 +149,140 @@ async def compare(
     date_from, date_to = _default_range(date_from, date_to)
     data = await dash_svc.get_period_comparison(db, date_from, date_to, tenant_id)
     return ResponseModel(data=data, message="Period comparison fetched")
+
+
+# ── KPI monitoring tab (entity-level metrics; date range defaults to today) ──────
+
+@router.get("/kpi/overview", response_model=CommonResponse)
+async def kpi_overview(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tenant_id: uuid.UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Headline counts for every entity + order/attendance metrics — the KPI tab's top cards."""
+    date_from, date_to = _default_range(date_from, date_to)
+    data = await dash_svc.get_kpi_overview(db, date_from, date_to, tenant_id)
+    return ResponseModel(data=data, message="KPI overview fetched")
+
+
+@router.get("/kpi/executives", response_model=CommonResponse)
+async def kpi_executives(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tenant_id: uuid.UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-executive KPIs — orders, value, delivery, plus attendance (days, distance, shops)."""
+    date_from, date_to = _default_range(date_from, date_to)
+    data = await dash_svc.get_executive_kpis(db, date_from, date_to, tenant_id)
+    return ResponseModel(data=data, message="Executive KPIs fetched")
+
+
+@router.get("/kpi/distributors", response_model=CommonResponse)
+async def kpi_distributors(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tenant_id: uuid.UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-distributor KPIs — orders handled, delivered, value, pieces for the range."""
+    date_from, date_to = _default_range(date_from, date_to)
+    data = await dash_svc.get_distributor_kpis(db, date_from, date_to, tenant_id)
+    return ResponseModel(data=data, message="Distributor KPIs fetched")
+
+
+@router.get("/kpi/shops", response_model=CommonResponse)
+async def kpi_shops(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    district_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID | None = None,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-shop KPIs — orders, value, pieces and last order date for the range."""
+    date_from, date_to = _default_range(date_from, date_to)
+    data = await dash_svc.get_shop_kpis(db, date_from, date_to, district_id, tenant_id, limit)
+    return ResponseModel(data=data, message="Shop KPIs fetched")
+
+
+@router.get("/executives/{user_id}/route", response_model=CommonResponse)
+async def executive_route(
+    user_id: uuid.UUID,
+    date: date | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """An executive's travelled route for a day — map-ready polyline + shop/check-in markers.
+
+    Defaults to today. Draw `route` as a polyline; place markers from `checkin`, `checkout`
+    and `shopVisits`.
+    """
+    day = date or datetime.now(timezone.utc).date()
+    data = await dash_svc.get_executive_route(db, user_id, day)
+    return ResponseModel(data=data, message="Executive route fetched")
+
+
+# ── KPI table Excel exports (the same rows as the JSON KPI endpoints, flattened) ──
+
+@router.get("/kpi/executives/excel")
+async def kpi_executives_excel(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tenant_id: uuid.UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Executive KPI table as Excel (per-category detail is omitted from the flat sheet)."""
+    date_from, date_to = _default_range(date_from, date_to)
+    rows = await dash_svc.get_executive_kpis(db, date_from, date_to, tenant_id)
+    flat = [{
+        "Executive": r["name"], "Phone": r["phone"], "Districts": r["districts"],
+        "Orders": r["orders"], "Order Value": r["orderValue"], "Pieces": r["pieces"],
+        "Delivered": r["delivered"], "Delivery Rate %": r["deliveryRate"],
+        "Count Target": r["orderCountTarget"], "Count Achv %": r["countAchievement"],
+        "Value Target": r["orderValueTarget"], "Value Achv %": r["valueAchievement"],
+        "Pieces Target": r["orderPiecesTarget"], "Pieces Achv %": r["piecesAchievement"],
+        "Days Worked": r["daysWorked"], "Distance (km)": r["distanceKm"],
+        "Work Hours": r["workHours"], "Shops Visited": r["shopsVisited"],
+    } for r in rows]
+    return excel_response(generate_excel(flat, "Executive KPIs"), f"executive_kpis_{_now_str()}")
+
+
+@router.get("/kpi/distributors/excel")
+async def kpi_distributors_excel(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tenant_id: uuid.UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Distributor KPI table as Excel."""
+    date_from, date_to = _default_range(date_from, date_to)
+    rows = await dash_svc.get_distributor_kpis(db, date_from, date_to, tenant_id)
+    flat = [{
+        "Distributor": r["name"], "Phone": r["phone"],
+        "Orders Handled": r["ordersHandled"], "Value": r["value"], "Pieces": r["pieces"],
+        "Delivered": r["delivered"], "Delivery Rate %": r["deliveryRate"],
+    } for r in rows]
+    return excel_response(generate_excel(flat, "Distributor KPIs"), f"distributor_kpis_{_now_str()}")
+
+
+@router.get("/kpi/shops/excel")
+async def kpi_shops_excel(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    district_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID | None = None,
+    limit: int = 1000,
+    db: AsyncSession = Depends(get_db),
+):
+    """Shop KPI table as Excel."""
+    date_from, date_to = _default_range(date_from, date_to)
+    rows = await dash_svc.get_shop_kpis(db, date_from, date_to, district_id, tenant_id, limit)
+    flat = [{
+        "Shop": r["name"], "District": r["district"], "Taluk": r["taluk"],
+        "Status": "Active" if r["isActive"] else "Inactive",
+        "EBO": "Yes" if r["isEbo"] else "No",
+        "Orders": r["orders"], "Value": r["value"], "Pieces": r["pieces"],
+        "Last Order": (r["lastOrderDate"][:10] if r["lastOrderDate"] else ""),
+    } for r in rows]
+    return excel_response(generate_excel(flat, "Shop KPIs"), f"shop_kpis_{_now_str()}")

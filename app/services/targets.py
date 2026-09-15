@@ -14,17 +14,18 @@ from app.core.exceptions import AppException
 
 
 async def set_target(db: AsyncSession, target_in: TargetCreate) -> ExecutiveTarget:
-    # Validate category_id for category_quantity
-    if target_in.target_type == TargetType.category_quantity and not target_in.category_id:
+    # Category targets (pieces or value) require a category_id
+    if target_in.target_type in (TargetType.category_quantity, TargetType.category_value) and not target_in.category_id:
         raise AppException(
             status_code=400,
-            detail="category_id is required for category_quantity target type"
+            detail="category_id is required for category targets"
         )
 
-    # Check existing — match on category_id too
+    # Check existing — match on tenant + category too (upsert per tenant/category)
     existing = await db.scalar(
         select(ExecutiveTarget).where(
             ExecutiveTarget.user_id == target_in.user_id,
+            ExecutiveTarget.tenant_id == target_in.tenant_id,
             ExecutiveTarget.year == target_in.year,
             ExecutiveTarget.month == target_in.month,
             ExecutiveTarget.target_type == target_in.target_type,

@@ -7,9 +7,11 @@ from app.models.base import BaseModel
 
 
 class TargetType(str, enum.Enum):
-    order_count = "order_count"      # number of orders
-    order_value = "order_value"      # total order value in ₹
+    order_count = "order_count"          # number of orders (tenant / overall level)
+    order_value = "order_value"          # total order value in ₹ (tenant / overall level)
+    order_pieces = "order_pieces"        # total pieces (tenant / overall level)
     category_quantity = "category_quantity"  # pieces of a specific category
+    category_value = "category_value"    # ₹ value of a specific category
 
 
 class ExecutiveTarget(BaseModel):
@@ -17,7 +19,7 @@ class ExecutiveTarget(BaseModel):
 
     __table_args__ = (
         UniqueConstraint(
-            "user_id", "year", "month", "target_type", "category_id",
+            "user_id", "tenant_id", "year", "month", "target_type", "category_id",
             name="uq_executive_target"
         ),
     )

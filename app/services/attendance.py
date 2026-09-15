@@ -102,6 +102,10 @@ async def _calculate_total_distance(db: AsyncSession, work_log_id: uuid.UUID) ->
 
     max_acc = settings.TA_GPS_MAX_ACCURACY_M
     kept = [p for p in pings if p.accuracy is None or float(p.accuracy) <= max_acc]
+    # If the accuracy filter dropped almost everything (phones often report >50 m), it would
+    # zero out the distance — fall back to the raw pings rather than reporting 0.
+    if len(kept) < 2 and len(pings) >= 2:
+        kept = list(pings)
 
     total_m = 0.0
     for i in range(1, len(kept)):

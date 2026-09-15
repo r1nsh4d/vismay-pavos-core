@@ -223,6 +223,7 @@ async def orders_excel(
             merge_cols=(
                 "Order Number",
                 "Bill Number",
+                "Secondary Bill Number",
                 "Type",
                 "Price Type",
                 "Shipment Status",
@@ -816,7 +817,17 @@ async def shop_visits_excel(
 ):
     """Shop entry/exit log — one row per shop visit with entry, exit and duration."""
     rows = await rd.get_shop_visit_report_data(db, user_id=user_id, date_from=date_from, date_to=date_to)
-    return excel_response(generate_excel(rows, "Shop Visits"), f"shop_visits_{_now_str()}")
+    return excel_response(
+        generate_excel(
+            rows,
+            "Shop Visits",
+            merges=[
+                (("Executive",), ("Executive",)),          # one merged Executive block
+                (("Executive", "Date"), ("Date",)),        # Date merged within each executive's day
+            ],
+        ),
+        f"shop_visits_{_now_str()}",
+    )
 
 
 @router.get("/shop-visits/pdf")

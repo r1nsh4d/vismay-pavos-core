@@ -848,6 +848,11 @@ async def update_delivered_at(
 
 
 async def soft_delete_order(db: AsyncSession, order: Order) -> None:
+    # Return stock to inventory if this order still holds a deduction (e.g. a 'placed'
+    # order). 'rejected'/'cancelled' orders already restored it, so the guard skips them.
+    if order.stock_deducted:
+        await _restore_all_stock(db, order)
+        order.stock_deducted = False
     order.is_deleted = True
     await db.flush()
 

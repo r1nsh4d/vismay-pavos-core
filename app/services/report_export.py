@@ -1,9 +1,20 @@
 import io
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timezone, timedelta
+
+# Reports render in India Standard Time (UTC+5:30, no DST — a fixed offset is exact).
+IST = timezone(timedelta(hours=5, minutes=30))
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
+
+# Recognise an =HYPERLINK("url", "label") cell so the PDF can render it as a real link.
+_HYPERLINK_RE = re.compile(r'^=HYPERLINK\("([^"]+)",\s*"(.*)"\)\s*$')
+
+
+def _xml_escape(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 from reportlab.lib.units import cm, mm
 from reportlab.lib.pagesizes import A4, landscape
@@ -84,7 +95,7 @@ def generate_excel(rows: list[dict], sheet_name: str = "Report") -> bytes:
 
     # Add generated timestamp in a metadata sheet
     meta_ws = wb.create_sheet("Info")
-    meta_ws.append(["Generated At", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+    meta_ws.append(["Generated At", datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")])
     meta_ws.append(["Total Rows", len(rows)])
     meta_ws.append(["Sheet", sheet_name])
 
@@ -93,30 +104,40 @@ def generate_excel(rows: list[dict], sheet_name: str = "Report") -> bytes:
     return buf.getvalue()
 '''
 
-def _merge_runs(ws, merge_key: str, merge_cols, header_row: int = 1) -> None:
-    """Vertically merge `merge_cols` across contiguous rows sharing the same
-    value in `merge_key`. No-op if either is missing."""
-    if not merge_key or not merge_cols:
+def _merge_runs(ws, rows, headers, key_fields, merge_cols, header_row: int = 1) -> None:
+    """Vertically merge `merge_cols` across contiguous rows that share the same key.
+
+    `key_fields` is one column name or a tuple of column names forming a composite key —
+    e.g. ("Order Number",) merges an order's line rows; ("Executive", "Date") merges an
+    executive's rows for one day. Group boundaries are computed from the in-memory `rows`
+    (no per-cell reads back from the worksheet), so it stays fast on large sheets. Only
+    multi-row groups are merged. No-op if config is missing.
+    """
+    if not key_fields or not merge_cols or not rows:
         return
-    headers = {c.value: c.column for c in ws[header_row]}
-    if merge_key not in headers:
+    if isinstance(key_fields, str):
+        key_fields = (key_fields,)
+    pos = {h: i for i, h in enumerate(headers)}
+    if any(k not in pos for k in key_fields):
         return
-    key_col = headers[merge_key]
-    cols = [headers[h] for h in merge_cols if h in headers]
+    cols = [pos[h] + 1 for h in merge_cols if h in pos]  # 1-based sheet columns
     if not cols:
         return
+
     center = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    r, last = header_row + 1, ws.max_row
-    while r <= last:
-        cur = ws.cell(row=r, column=key_col).value
-        end = r
-        while end + 1 <= last and ws.cell(row=end + 1, column=key_col).value == cur:
-            end += 1
-        if end > r:  # only multi-row groups
-            for col in cols:
-                ws.merge_cells(start_row=r, start_column=col, end_row=end, end_column=col)
-                ws.cell(row=r, column=col).alignment = center
-        r = end + 1
+    key_vals = [tuple(r.get(k) for k in key_fields) for r in rows]
+    n = len(key_vals)
+
+    group_start = 0
+    for i in range(1, n + 1):
+        if i == n or key_vals[i] != key_vals[group_start]:
+            if i - group_start > 1:  # only multi-row groups need merging
+                r0 = header_row + 1 + group_start   # first data row of the group
+                r1 = header_row + i                 # last data row of the group
+                for col in cols:
+                    ws.merge_cells(start_row=r0, start_column=col, end_row=r1, end_column=col)
+                    ws.cell(row=r0, column=col).alignment = center
+            group_start = i
 
 
 def generate_excel(
@@ -124,7 +145,14 @@ def generate_excel(
         sheet_name: str = "Report",
         merge_key: str | None = None,
         merge_cols: tuple[str, ...] | None = None,
+        merges: list | None = None,
 ) -> bytes:
+    """Build an Excel workbook from row dicts.
+
+    Cell merging is optional. Use either a single grouping via `merge_key`/`merge_cols`,
+    or several grouping levels via `merges` — a list of `(key_fields, columns)` tuples,
+    e.g. `[(("Executive",), ("Executive",)), (("Executive", "Date"), ("Date",))]`.
+    """
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = sheet_name[:31]  # Excel sheet name max 31 chars
@@ -170,17 +198,21 @@ def generate_excel(
             # Convert None to empty string
             if value is None:
                 value = ""
+            # A leading "=" is an Excel formula (e.g. a =HYPERLINK map link) — leave it
+            # intact (don't uppercase or it breaks the URL) so openpyxl writes it live.
+            is_formula = isinstance(value, str) and value.startswith("=")
             # Client requirement: all text values shown uppercase (numbers/dates untouched)
-            if isinstance(value, str):
+            if isinstance(value, str) and not is_formula:
                 value = value.upper()
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
             cell.alignment = data_align
             cell.border = thin_border
             cell.fill = fill
 
-            n = len(value) if isinstance(value, str) else len(str(value))
-            if n > col_max[col_idx - 1]:
-                col_max[col_idx - 1] = n
+            if not is_formula:  # formula text length would wildly over-size the column
+                n = len(value) if isinstance(value, str) else len(str(value))
+                if n > col_max[col_idx - 1]:
+                    col_max[col_idx - 1] = n
 
     # Auto column width (computed above while writing)
     for i in range(len(headers)):
@@ -192,14 +224,17 @@ def generate_excel(
     # Freeze header row
     ws.freeze_panes = "A2"
 
-    # Cell-merging is intentionally disabled: order-level values repeat on each line row
-    # instead of being visually merged. This keeps output identical at any size, fast to
-    # generate, and friendly to Excel sort/filter/pivot. (merge_key/merge_cols kept for
-    # backward compatibility but no longer applied.)
+    # Apply cell merging. Groups are derived from the in-memory `rows` (no per-cell
+    # worksheet reads), so this stays fast on large sheets. Columns not listed stay per row.
+    specs = list(merges) if merges else []
+    if merge_key and merge_cols:
+        specs.append((merge_key, merge_cols))
+    for key_fields, cols in specs:
+        _merge_runs(ws, rows, headers, key_fields, cols)
 
     # Add generated timestamp in a metadata sheet
     meta_ws = wb.create_sheet("Info")
-    meta_ws.append(["Generated At", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+    meta_ws.append(["Generated At", datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")])
     meta_ws.append(["Total Rows", len(rows)])
     meta_ws.append(["Sheet", sheet_name])
 
@@ -243,7 +278,7 @@ def generate_pdf(
     # Title + timestamp
     elements.append(Paragraph(title, styles["Title"]))
     elements.append(Paragraph(
-        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Generated: {datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')}",
         subtitle_style,
     ))
     elements.append(Spacer(1, 0.5 * cm))
@@ -263,13 +298,18 @@ def generate_pdf(
     else:
         col_widths = [page_width / len(headers)] * len(headers)
 
+    def _pdf_cell(value) -> "Paragraph":
+        s = str(value or "")
+        m = _HYPERLINK_RE.match(s)
+        if m:  # render =HYPERLINK(url, label) as a clickable link
+            url, label = _xml_escape(m.group(1)), _xml_escape(m.group(2))
+            return Paragraph(f'<link href="{url}" color="#1F4E79">{label}</link>', cell_style)
+        # Client requirement: all cell values shown uppercase (digits/dates unaffected)
+        return Paragraph(s.upper().replace("\n", "<br/>"), cell_style)
+
     table_data = [[Paragraph(f"<b>{h}</b>", cell_style) for h in headers]]
     for row in rows:
-        # Client requirement: all cell values shown uppercase (digits/dates unaffected)
-        table_data.append([
-            Paragraph(str(row.get(h, "") or "").upper().replace("\n", "<br/>"), cell_style)
-            for h in headers
-        ])
+        table_data.append([_pdf_cell(row.get(h, "")) for h in headers])
 
     table = Table(table_data, colWidths=col_widths, repeatRows=1)
 
@@ -311,7 +351,7 @@ def generate_pdf(
         canvas.drawString(
             1 * cm,
             0.75 * cm,
-            f"{title} — {datetime.now().strftime('%Y-%m-%d')}",
+            f"{title} — {datetime.now(IST).strftime('%Y-%m-%d')}",
         )
         canvas.restoreState()
 
@@ -338,7 +378,7 @@ def _date(iso, fmt="%d %b %Y"):
         return "-"
     try:
         return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(
-            timezone.utc).strftime(fmt)
+            IST).strftime(fmt)
     except Exception:
         return str(iso)
 

@@ -1,7 +1,20 @@
 import uuid
 from collections import defaultdict
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from typing import Optional
+
+# Reports are shown in India Standard Time (UTC+5:30). India has no DST, so a fixed
+# offset is exact — and avoids needing system tz data on the slim container image.
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _to_ist(dt):
+    """Convert a (UTC / naive-UTC) datetime to IST; None-safe."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(IST)
 from sqlalchemy import select, func, extract
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -215,7 +228,7 @@ async def get_order_consolidation_report(
         tenant_name = tenant.name if tenant else ""
 
     return {
-        "generatedAt": datetime.now().strftime("%d-%m-%Y"),
+        "generatedAt": datetime.now(IST).strftime("%d-%m-%Y"),
         "tenantName": tenant_name,
         "categories": [c.name for c in categories],
         "rows": report_rows,
@@ -559,7 +572,7 @@ async def get_executive_wise_report(
         tenant_name = tenant.name if tenant else ""
 
     return {
-        "generatedAt": datetime.now().strftime("%d-%m-%Y"),
+        "generatedAt": datetime.now(IST).strftime("%d-%m-%Y"),
         "tenantName": tenant_name,
         "year": year,
         "month": month,
@@ -805,7 +818,8 @@ def _tat_days(start, end) -> str | float:
 
 
 def _fmt(dt) -> str:
-    """Format a status timestamp, blank if not yet reached."""
+    """Format a status timestamp in IST, 24-hour; blank if not yet reached."""
+    dt = _to_ist(dt)
     return dt.strftime("%Y-%m-%d %H:%M") if dt else ""
 
 
@@ -915,7 +929,7 @@ async def get_order_report_data(
             "Rejected At": _fmt(o.rejected_at),
             "Returned At": _fmt(o.returned_at),
             # ── Summary dates ──
-            "Booking Date": booking_dt.strftime("%Y-%m-%d") if booking_dt else "",
+            "Booking Date": _to_ist(booking_dt).strftime("%Y-%m-%d") if booking_dt else "",
             "Delivery Date": _fmt(o.delivered_at),
             # ── Turn-around times ──
             # Warehouse TAT: billed → dispatched (dwell time inside the warehouse).
@@ -1324,7 +1338,7 @@ async def get_shop_report_data(
             "Active": "Yes" if s.is_active else "No",
             "Total Orders": count,
             "Total Value (₹)": float(value),
-            "Last Order Date": last_order_at.strftime("%Y-%m-%d") if last_order_at else "",
+            "Last Order Date": _to_ist(last_order_at).strftime("%Y-%m-%d") if last_order_at else "",
         })
     return rows
 
@@ -1418,7 +1432,7 @@ async def get_user_report_data(
             "States": states,
             "Active": "Yes" if u.is_active else "No",
             "Verified": "Yes" if u.is_verified else "No",
-            "Created": u.created_at.strftime("%Y-%m-%d"),
+            "Created": _to_ist(u.created_at).strftime("%Y-%m-%d"),
         })
     return rows
 
@@ -1516,18 +1530,25 @@ async def get_executive_performance_data(
     )).all()
     pieces_by_exec = {exec_id: int(p) for exec_id, p in pieces_rows}
 
-    # ---- one query for all targets ----
+    # ---- overall targets (order_count / order_value / order_pieces) ----
+    # Category targets live in the category matrix report, so exclude them here. Tenant-scoped
+    # when the report is; summed across any duplicates so per-tenant targets aren't lost.
+    target_filters = [
+        ExecutiveTarget.user_id.in_(exec_ids),
+        ExecutiveTarget.year == year,
+        ExecutiveTarget.month == month,
+        ExecutiveTarget.category_id.is_(None),
+    ]
+    if tenant_id:
+        target_filters.append(ExecutiveTarget.tenant_id == tenant_id)
     target_rows = (await db.execute(
-        select(ExecutiveTarget).where(
-            ExecutiveTarget.user_id.in_(exec_ids),
-            ExecutiveTarget.year == year,
-            ExecutiveTarget.month == month,
-        )
+        select(ExecutiveTarget).where(*target_filters)
     )).scalars().all()
 
     targets_by_exec: dict[uuid.UUID, dict] = defaultdict(dict)
     for t in target_rows:
-        targets_by_exec[t.user_id][t.target_type] = float(t.target_value)
+        d = targets_by_exec[t.user_id]
+        d[t.target_type] = d.get(t.target_type, 0.0) + float(t.target_value)
 
     # ---- build rows ----
     rows = []
@@ -1542,6 +1563,8 @@ async def get_executive_performance_data(
         tmap = targets_by_exec.get(exe.id, {})
         count_target = tmap.get(TargetType.order_count, 0)
         value_target = tmap.get(TargetType.order_value, 0)
+        pieces_target = tmap.get(TargetType.order_pieces, 0)
+        pieces_actual = pieces_by_exec.get(exe.id, 0)
 
         districts = ", ".join(
             ud.district.name for ud in exe.user_districts if ud.district
@@ -1561,6 +1584,8 @@ async def get_executive_performance_data(
             "Order Value (₹)": order_value,
             "Value Target (₹)": value_target,
             "Value Achievement %": round(order_value / value_target * 100, 2) if value_target else "N/A",
+            "Pieces Target": pieces_target,
+            "Pieces Achievement %": round(pieces_actual / pieces_target * 100, 2) if pieces_target else "N/A",
             **{f"Status - {s.value}": status_counts[s] for s in status_columns},
         })
 
@@ -1715,7 +1740,7 @@ async def get_returns_report_data(
     rows = []
     for r in returns:
         rows.append({
-            "Date": r.created_at.strftime("%Y-%m-%d"),
+            "Date": _to_ist(r.created_at).strftime("%Y-%m-%d"),
             "Order Number": r.order.order_number if r.order else "",
             "Product": r.product.name if r.product else "",
             "Variant Size": r.variant.size if r.variant else "",
@@ -1866,6 +1891,27 @@ def _exec_name(user) -> str:
     return f"{user.first_name} {user.last_name or ''}".strip()
 
 
+def _coords(lat, lng) -> str:
+    """`lat, lng` string, blank if either is missing."""
+    if lat is None or lng is None:
+        return ""
+    return f"{float(lat)}, {float(lng)}"
+
+
+def _map_link(address, lat, lng) -> str:
+    """A clickable Google-Maps hyperlink to the point, showing the address (or the
+    coordinates) as the link text. Falls back to plain text when coordinates are missing.
+
+    Emitted as an =HYPERLINK() formula so it is clickable in Excel; the PDF/Excel writers
+    detect this form and render it as a real link.
+    """
+    coord = _coords(lat, lng)
+    if not coord:
+        return address or ""
+    label = (address or coord).replace('"', "'")
+    return f'=HYPERLINK("https://www.google.com/maps?q={float(lat)},{float(lng)}", "{label}")'
+
+
 async def get_attendance_report_data(
     db: AsyncSession,
     user_id: Optional[uuid.UUID] = None,
@@ -1894,17 +1940,28 @@ async def get_attendance_report_data(
 
     rows = []
     for l in logs:
+        # Work hours & distance are only meaningful once the day is closed (checked out);
+        # leave them blank for still-open / never-checked-out days.
+        checked_out = l.checkout_at is not None
+        work_hours = (
+            round(l.total_work_minutes / 60, 2)
+            if (checked_out and l.total_work_minutes is not None) else ""
+        )
+        distance = (
+            float(l.total_distance_km)
+            if (checked_out and l.total_distance_km is not None) else ""
+        )
         rows.append({
             "Executive": _exec_name(l.user),
             "Date": str(l.work_date),
             "Check In": _fmt(l.checkin_at),
             "Check Out": _fmt(l.checkout_at),
-            "Work Hours": round(l.total_work_minutes / 60, 2) if l.total_work_minutes else 0,
-            "Distance (km)": float(l.total_distance_km or 0),
+            "Work Hours": work_hours,
+            "Distance (km)": distance,
             "Shops Visited": l.total_shops_visited or 0,
             "Status": l.status.value if l.status else "",
-            "Check-in Location": l.checkin_address or "",
-            "Check-out Location": l.checkout_address or "",
+            "Check-in Location": _map_link(l.checkin_address, l.checkin_lat, l.checkin_lng),
+            "Check-out Location": _map_link(l.checkout_address, l.checkout_lat, l.checkout_lng),
         })
     return rows
 
@@ -1951,4 +2008,8 @@ async def get_shop_visit_report_data(
             "Duration (min)": v.duration_minutes if v.duration_minutes is not None else "",
             "Notes": v.notes or "",
         })
+
+    # Group by executive, then day, then visit time — so the Executive and Date cells sit
+    # in contiguous blocks and can be merged in the Excel report.
+    rows.sort(key=lambda r: (r["Executive"], r["Date"], r["Entry Time"]))
     return rows
