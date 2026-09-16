@@ -1536,6 +1536,52 @@ async def get_executive_performance_data(
     )).all()
     pieces_by_exec = {exec_id: int(p) for exec_id, p in pieces_rows}
 
+    def _label(status) -> str:
+        """Human-readable status label for column headers, e.g. 'PARTIALLY RETURNED'."""
+        return status.value.replace("_", " ").upper()
+
+    # ---- categories present, for the per-category breakdown columns ----
+    cat_q = select(Category).where(Category.is_deleted == False)  # noqa
+    if tenant_id:
+        cat_q = cat_q.where(Category.tenant_id == tenant_id)
+    categories = (await db.execute(cat_q.order_by(Category.name))).scalars().unique().all()
+
+    # ---- per-executive x category: distinct orders + line-item value ----
+    cat_rows = (await db.execute(
+        select(
+            Order.assigned_executive, Category.id,
+            func.count(func.distinct(Order.id)),
+            func.coalesce(func.sum(OrderItem.total_price), 0),
+        )
+        .select_from(OrderItem)
+        .join(Order, OrderItem.order_id == Order.id)
+        .join(Product, OrderItem.product_id == Product.id)
+        .join(Category, Product.category_id == Category.id)
+        .where(*order_filters)
+        .group_by(Order.assigned_executive, Category.id)
+    )).all()
+    cat_totals_by_exec: dict = defaultdict(dict)
+    for exec_id, cat_id, cnt, val in cat_rows:
+        cat_totals_by_exec[exec_id][cat_id] = (int(cnt), float(val))
+
+    # ---- per-executive x category x status: distinct orders + line-item value ----
+    cat_status_rows = (await db.execute(
+        select(
+            Order.assigned_executive, Category.id, Order.status,
+            func.count(func.distinct(Order.id)),
+            func.coalesce(func.sum(OrderItem.total_price), 0),
+        )
+        .select_from(OrderItem)
+        .join(Order, OrderItem.order_id == Order.id)
+        .join(Product, OrderItem.product_id == Product.id)
+        .join(Category, Product.category_id == Category.id)
+        .where(*order_filters)
+        .group_by(Order.assigned_executive, Category.id, Order.status)
+    )).all()
+    cat_status_by_exec: dict = defaultdict(lambda: defaultdict(dict))
+    for exec_id, cat_id, status, cnt, val in cat_status_rows:
+        cat_status_by_exec[exec_id][cat_id][status] = (int(cnt), float(val))
+
     # ---- overall targets (order_count / order_value / order_pieces) ----
     # Category targets live in the category matrix report, so exclude them here. Tenant-scoped
     # when the report is; summed across any duplicates so per-tenant targets aren't lost.
@@ -1928,6 +1974,21 @@ def _coords(lat, lng) -> str:
     if lat is None or lng is None:
         return ""
     return f"{float(lat)}, {float(lng)}"
+
+
+def _shop_visit_history(visits) -> str:
+    """One-cell summary of the day's shop visits, in IST:
+    'SHOP A (09:30-10:15, 45m); SHOP B (11:00-…)'. Blank if there were none."""
+    if not visits:
+        return ""
+    parts = []
+    for v in sorted(visits, key=lambda x: x.entry_at):
+        name = v.shop.name if v.shop else "Shop"
+        entry = fmt_ist(v.entry_at, "%H:%M") if v.entry_at else "?"
+        exit_ = fmt_ist(v.exit_at, "%H:%M") if v.exit_at else "…"
+        dur = f", {v.duration_minutes}m" if v.duration_minutes is not None else ""
+        parts.append(f"{name} ({entry}-{exit_}{dur})")
+    return " -> ".join(parts)
 
 
 def _map_link(address, lat, lng) -> str:
