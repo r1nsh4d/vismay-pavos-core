@@ -413,7 +413,13 @@ def _styles():
     }
 
 
-def build_sales_order_pdf(order: dict) -> bytes:
+def build_sales_order_pdf(order: dict, show_amounts: bool = True) -> bytes:
+    """Sales-order PDF.
+
+    `show_amounts=False` produces a price-free copy: the UNIT PRICE / AMOUNT columns
+    and the money totals block are dropped, leaving only the quantity summary. The
+    total quantity (sum of all line pieces) is always shown.
+    """
     s = _styles()
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -470,21 +476,30 @@ def build_sales_order_pdf(order: dict) -> bytes:
     story += [parties, Spacer(1, 18)]
 
     # ── Line items ──
-    header = [Paragraph("#", s["th"]), Paragraph("ITEM", s["th"]),
-              Paragraph("QTY", s["th_r"]), Paragraph("UNIT PRICE", s["th_r"]),
-              Paragraph("AMOUNT", s["th_r"])]
+    if show_amounts:
+        header = [Paragraph("#", s["th"]), Paragraph("ITEM", s["th"]),
+                  Paragraph("QTY", s["th_r"]), Paragraph("UNIT PRICE", s["th_r"]),
+                  Paragraph("AMOUNT", s["th_r"])]
+    else:
+        header = [Paragraph("#", s["th"]), Paragraph("ITEM", s["th"]),
+                  Paragraph("QTY", s["th_r"])]
     rows = [header]
+    total_qty = 0
     for i, it in enumerate(order.get("items", []), start=1):
+        qty = it.get("count", 0) or 0
+        total_qty += qty
         name_cell = [Paragraph(str(it.get("productName") or "-"), s["cell"])]
         if it.get("setTypeName"):
             name_cell.append(Paragraph(str(it["setTypeName"]), s["cell_meta"]))
-        rows.append([
-            Paragraph(str(i), s["cell"]), name_cell,
-            Paragraph(str(it.get("count", 0)), s["cell_r"]),
-            Paragraph(_money(it.get("unitPrice")), s["cell_r"]),
-            Paragraph(_money(it.get("totalPrice")), s["cell_r"]),
-        ])
-    cw = [avail * 0.06, avail * 0.50, avail * 0.10, avail * 0.16, avail * 0.18]
+        row = [Paragraph(str(i), s["cell"]), name_cell, Paragraph(str(qty), s["cell_r"])]
+        if show_amounts:
+            row += [Paragraph(_money(it.get("unitPrice")), s["cell_r"]),
+                    Paragraph(_money(it.get("totalPrice")), s["cell_r"])]
+        rows.append(row)
+    if show_amounts:
+        cw = [avail * 0.06, avail * 0.50, avail * 0.10, avail * 0.16, avail * 0.18]
+    else:
+        cw = [avail * 0.08, avail * 0.72, avail * 0.20]
     items = Table(rows, colWidths=cw, repeatRows=1)
     st = [
         ("BACKGROUND", (0, 0), (-1, 0), INK),
@@ -500,22 +515,34 @@ def build_sales_order_pdf(order: dict) -> bytes:
     story += [items, Spacer(1, 14)]
 
     # ── Totals (right aligned block) ──
-    disc_lbl = "Discount"
-    if order.get("discountPercent"):
-        disc_lbl = f"Discount ({order.get('discountPercent')}%)"
-    tot_rows = [
-        [Paragraph("Subtotal", s["line"]), Paragraph(_money(order.get("subtotal")), s["cell_r"])],
-        [Paragraph(disc_lbl, s["line"]),
-         Paragraph(f"- {_money(order.get('discountAmount'))}", s["cell_r"])],
-        [Paragraph("<b>Total</b>", ParagraphStyle("g", parent=s["line"], fontSize=12,
-                                                  textColor=INK)),
-         Paragraph(f"<b>INR {_money(order.get('totalAmount'))}</b>",
-                   ParagraphStyle("gr", parent=s["cell_r"], fontSize=12))],
-    ]
+    qty_val = ParagraphStyle("qv", parent=s["cell_r"], fontSize=12, textColor=INK)
+    if show_amounts:
+        disc_lbl = "Discount"
+        if order.get("discountPercent"):
+            disc_lbl = f"Discount ({order.get('discountPercent')}%)"
+        tot_rows = [
+            [Paragraph("Total Quantity", s["line"]), Paragraph(f"<b>{total_qty}</b>", qty_val)],
+            [Paragraph("Subtotal", s["line"]), Paragraph(_money(order.get("subtotal")), s["cell_r"])],
+            [Paragraph(disc_lbl, s["line"]),
+             Paragraph(f"- {_money(order.get('discountAmount'))}", s["cell_r"])],
+            [Paragraph("<b>Total</b>", ParagraphStyle("g", parent=s["line"], fontSize=12,
+                                                      textColor=INK)),
+             Paragraph(f"<b>INR {_money(order.get('totalAmount'))}</b>",
+                       ParagraphStyle("gr", parent=s["cell_r"], fontSize=12))],
+        ]
+        grand_row = 3
+    else:
+        tot_rows = [
+            [Paragraph("<b>Total Quantity</b>", ParagraphStyle("g", parent=s["line"], fontSize=12,
+                                                               textColor=INK)),
+             Paragraph(f"<b>{total_qty}</b>", qty_val)],
+        ]
+        grand_row = 0
     totals = Table(tot_rows, colWidths=[avail * 0.22, avail * 0.20])
     totals.setStyle(TableStyle([
         ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("LINEABOVE", (0, 2), (-1, 2), 1.4, INK), ("TOPPADDING", (0, 2), (-1, 2), 9),
+        ("LINEABOVE", (0, grand_row), (-1, grand_row), 1.4, INK),
+        ("TOPPADDING", (0, grand_row), (-1, grand_row), 9),
     ]))
     wrap = Table([[totals]], colWidths=[avail])
     wrap.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "RIGHT"),

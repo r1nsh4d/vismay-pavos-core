@@ -832,6 +832,7 @@ async def get_order_report_data(
     status: Optional[OrderStatus] = None,
     order_type: Optional[OrderType] = None,
     include_children: bool = True,
+    child_only: bool = False,
 ) -> list[dict]:
     query = (
         select(Order)
@@ -850,7 +851,10 @@ async def get_order_report_data(
 
     # Parent orders only when children are excluded; by default split children are included
     # so their moved-out items/amounts are counted (parent + child together = original total).
-    if not include_children:
+    # `child_only` overrides everything and returns just the split-child orders.
+    if child_only:
+        query = query.where(Order.parent_order_id != None)  # noqa
+    elif not include_children:
         query = query.where(Order.parent_order_id == None)  # noqa
 
     query = _date_filters(query, Order, date_from, date_to)
@@ -959,6 +963,104 @@ async def get_order_report_data(
                 "Line Total": float(item.total_price or 0),
                 **order_tail,
             })
+    return rows
+
+
+async def get_order_archive_data(
+    db: AsyncSession,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    tenant_id: Optional[uuid.UUID] = None,
+    state_id: Optional[uuid.UUID] = None,
+    district_id: Optional[uuid.UUID] = None,
+    taluk_id: Optional[uuid.UUID] = None,
+    shop_id: Optional[uuid.UUID] = None,
+    distributor_id: Optional[uuid.UUID] = None,
+    assigned_executive: Optional[uuid.UUID] = None,
+    status: Optional[OrderStatus] = None,
+    order_type: Optional[OrderType] = None,
+    include_children: bool = True,
+    child_only: bool = False,
+) -> list[dict]:
+    """Lightweight, one-row-per-order archive report.
+
+    Built for large / slow pulls: it skips the per-line-item expansion and the heavy
+    lifecycle-timestamp block of the full order report, loading only a handful of
+    display relationships plus a single grouped aggregate for pieces. The result is
+    far fewer rows and columns, so the export builds and downloads with much less load.
+    """
+    query = (
+        select(Order)
+        .where(Order.is_deleted == False)  # noqa: E712
+        .options(
+            selectinload(Order.shop).selectinload(Shop.district),
+            selectinload(Order.executive),
+            selectinload(Order.distributor),
+            selectinload(Order.tenant),
+        )
+    )
+
+    if child_only:
+        query = query.where(Order.parent_order_id != None)  # noqa
+    elif not include_children:
+        query = query.where(Order.parent_order_id == None)  # noqa
+
+    query = _date_filters(query, Order, date_from, date_to)
+
+    if tenant_id:
+        query = query.where(Order.tenant_id == tenant_id)
+    if shop_id:
+        query = query.where(Order.shop_id == shop_id)
+    if distributor_id:
+        query = query.where(Order.distributor_id == distributor_id)
+    if assigned_executive:
+        query = query.where(Order.assigned_executive == assigned_executive)
+    if status:
+        query = query.where(Order.status == status)
+    if order_type:
+        query = query.where(Order.order_type == order_type)
+
+    if district_id or taluk_id or state_id:
+        query = query.join(Order.shop)
+        if district_id:
+            query = query.where(Shop.district_id == district_id)
+        if taluk_id:
+            query = query.where(Shop.taluk_id == taluk_id)
+        if state_id:
+            query = query.join(Shop.district).where(District.state_id == state_id)
+
+    result = await db.execute(query.order_by(Order.created_at.desc()))
+    orders = result.scalars().unique().all()
+
+    if not orders:
+        return []
+
+    # Single grouped aggregate for piece counts — avoids eager-loading every line item.
+    order_ids = [o.id for o in orders]
+    pieces_rows = await db.execute(
+        select(OrderItem.order_id, func.coalesce(func.sum(OrderItem.count), 0))
+        .where(OrderItem.order_id.in_(order_ids))
+        .group_by(OrderItem.order_id)
+    )
+    pieces_by_order = {oid: int(cnt or 0) for oid, cnt in pieces_rows.all()}
+
+    rows = []
+    for o in orders:
+        rows.append({
+            "Order Number": o.order_number,
+            "Bill Number": o.bill_number or "",
+            "Secondary Bill Number": o.secondary_bill_number or "",
+            "Date": fmt_ist(o.created_at, "%Y-%m-%d"),
+            "Type": o.order_type.value,
+            "Status": o.status.value,
+            "Tenant": o.tenant.name if o.tenant else "",
+            "Shop": o.shop.name if o.shop else "",
+            "District": o.shop.district.name if (o.shop and o.shop.district) else "",
+            "Executive": f"{o.executive.first_name} {o.executive.last_name}".strip() if o.executive else "",
+            "Distributor": _distributor_name(o.distributor) if o.distributor else "",
+            "Pieces": pieces_by_order.get(o.id, 0),
+            "Order Total": float(o.total_amount),
+        })
     return rows
 
 

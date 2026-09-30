@@ -217,10 +217,15 @@ async def orders_excel(
     status: OrderStatus | None = None,
     order_type: OrderType | None = None,
     include_children: bool = True,
+    child_only: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Download detailed order line items as Excel."""
+    """Download detailed order line items as Excel.
+
+    `child_only=true` returns only split-child orders. `include_children=false`
+    returns only parent/standalone orders (ignored when `child_only` is set).
+    """
     rows = await rd.get_order_report_data(
         db,
         date_from=date_from,
@@ -235,6 +240,7 @@ async def orders_excel(
         status=status,
         order_type=order_type,
         include_children=include_children,
+        child_only=child_only,
     )
     return excel_response(
         generate_excel(
@@ -297,10 +303,15 @@ async def orders_pdf(
     status: OrderStatus | None = None,
     order_type: OrderType | None = None,
     include_children: bool = True,
+    child_only: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Download detailed order report as PDF."""
+    """Download detailed order report as PDF.
+
+    `child_only=true` returns only split-child orders. `include_children=false`
+    returns only parent/standalone orders (ignored when `child_only` is set).
+    """
     rows = await rd.get_order_report_data(
         db,
         date_from=date_from,
@@ -315,6 +326,7 @@ async def orders_pdf(
         status=status,
         order_type=order_type,
         include_children=include_children,
+        child_only=child_only,
     )
     ORDER_COL_WEIGHTS = {
         "Order Number": 1.5, "Date": 1, "Type": 0.8, "Price Type": 0.6,
@@ -328,6 +340,102 @@ async def orders_pdf(
         generate_pdf(rows, "Orders Report", col_weights=ORDER_COL_WEIGHTS),
         f"orders_{_now_str()}",
     )
+
+
+# ── Order Archive (lightweight, one row per order) ─────────────────────────────
+
+@router.get("/orders/archive/excel")
+async def orders_archive_excel(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tenant_id: uuid.UUID | None = None,
+    state_id: uuid.UUID | None = None,
+    district_id: uuid.UUID | None = None,
+    taluk_id: uuid.UUID | None = None,
+    shop_id: uuid.UUID | None = None,
+    distributor_id: uuid.UUID | None = None,
+    assigned_executive: uuid.UUID | None = None,
+    status: OrderStatus | None = None,
+    order_type: OrderType | None = None,
+    include_children: bool = True,
+    child_only: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Lightweight order archive as Excel — one row per order with a reduced column
+    set, built for large/slow date ranges that time out on the detailed report.
+
+    `child_only=true` returns only split-child orders. `include_children=false`
+    returns only parent/standalone orders (ignored when `child_only` is set).
+    """
+    rows = await rd.get_order_archive_data(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        tenant_id=tenant_id,
+        state_id=state_id,
+        district_id=district_id,
+        taluk_id=taluk_id,
+        shop_id=shop_id,
+        distributor_id=distributor_id,
+        assigned_executive=assigned_executive,
+        status=status,
+        order_type=order_type,
+        include_children=include_children,
+        child_only=child_only,
+    )
+    return excel_response(
+        generate_excel(rows, "Order Archive"),
+        f"order_archive_{_now_str()}",
+    )
+
+
+@router.get("/orders/archive/pdf")
+async def orders_archive_pdf(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tenant_id: uuid.UUID | None = None,
+    state_id: uuid.UUID | None = None,
+    district_id: uuid.UUID | None = None,
+    taluk_id: uuid.UUID | None = None,
+    shop_id: uuid.UUID | None = None,
+    distributor_id: uuid.UUID | None = None,
+    assigned_executive: uuid.UUID | None = None,
+    status: OrderStatus | None = None,
+    order_type: OrderType | None = None,
+    include_children: bool = True,
+    child_only: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Lightweight order archive as PDF — one row per order with a reduced column set."""
+    rows = await rd.get_order_archive_data(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        tenant_id=tenant_id,
+        state_id=state_id,
+        district_id=district_id,
+        taluk_id=taluk_id,
+        shop_id=shop_id,
+        distributor_id=distributor_id,
+        assigned_executive=assigned_executive,
+        status=status,
+        order_type=order_type,
+        include_children=include_children,
+        child_only=child_only,
+    )
+    ARCHIVE_COL_WEIGHTS = {
+        "Order Number": 1.4, "Bill Number": 1.0, "Secondary Bill Number": 1.2,
+        "Date": 0.9, "Type": 0.7, "Status": 0.9, "Tenant": 1.0, "Shop": 1.6,
+        "District": 1.1, "Executive": 1.3, "Distributor": 1.3, "Pieces": 0.6,
+        "Order Total": 0.9,
+    }
+    return pdf_response(
+        generate_pdf(rows, "Order Archive", col_weights=ARCHIVE_COL_WEIGHTS),
+        f"order_archive_{_now_str()}",
+    )
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STOCK REPORTS

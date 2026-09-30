@@ -601,13 +601,16 @@ async def get_order_hierarchy(
 @router.get("/{order_id}/invoice")
 async def order_sales_order(
     order_id: uuid.UUID,
+    show_amounts: bool = True,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Sales-order PDF. Pass `show_amounts=false` for a price-free copy — prices and
+    the money totals are hidden, leaving item quantities and the total quantity."""
     order = await order_svc.get_order_by_id(db, order_id)
     if not order:
         return ErrorResponseModel(code=404, message="Order not found", error={})
     data = order_svc.serialize_order(order)
-    pdf = build_sales_order_pdf(data)
+    pdf = build_sales_order_pdf(data, show_amounts=show_amounts)
     return pdf_response(pdf, f"sales_order_{data['orderNumber']}")
 
