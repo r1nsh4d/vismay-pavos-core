@@ -20,7 +20,11 @@
 #
 # If you omit the argument it looks for ./dump.sql, ./dump.sql.gz or ./dump.dump.
 #
-set -euo pipefail
+set -eu
+# pipefail catches failures in the `gunzip | psql` restore, but it's a bash/ksh
+# feature — enable it only if the running shell supports it (so `sh bootstrap.sh`
+# doesn't die with "illegal option -o pipefail").
+(set -o pipefail) 2>/dev/null && set -o pipefail || true
 
 cd "$(dirname "$0")"
 
