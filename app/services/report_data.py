@@ -32,11 +32,15 @@ from app.core.timezone import IST, to_ist, fmt_ist, ist_day_start_utc, ist_day_e
 # here before hitting the DB, and every displayed timestamp is converted back to IST
 # at the point it's formatted (see _fmt / _time_only below).
 
-def _date_filters(query, model, date_from, date_to):
+def _date_filters(query, model, date_from, date_to, date_col=None):
+    """Filter `query` to an IST calendar-date range. By default filters on the
+    model's `created_at`; pass `date_col` (e.g. Order.billed_at) to filter on another
+    timestamp column instead — used by the order report's `date_basis` toggle."""
+    col = date_col if date_col is not None else model.created_at
     if date_from:
-        query = query.where(model.created_at >= ist_day_start_utc(date_from))
+        query = query.where(col >= ist_day_start_utc(date_from))
     if date_to:
-        query = query.where(model.created_at <= ist_day_end_utc(date_to))
+        query = query.where(col <= ist_day_end_utc(date_to))
     return query
 
 
@@ -833,6 +837,7 @@ async def get_order_report_data(
     order_type: Optional[OrderType] = None,
     include_children: bool = True,
     child_only: bool = False,
+    date_basis: str = "order",
 ) -> list[dict]:
     query = (
         select(Order)
@@ -857,7 +862,13 @@ async def get_order_report_data(
     elif not include_children:
         query = query.where(Order.parent_order_id == None)  # noqa
 
-    query = _date_filters(query, Order, date_from, date_to)
+    # date_basis="order" (default): filter on created_at = the order's arrival date.
+    #   Split children inherit their root order's date, so the whole family counts in the
+    #   month the original order arrived — what the sales team wants ("fresh orders this month").
+    # date_basis="billed": filter on billed_at, so each portion counts in the month it was
+    #   billed — a revenue/billing view where a later-billed split falls in its billing month.
+    date_col = Order.billed_at if date_basis == "billed" else Order.created_at
+    query = _date_filters(query, Order, date_from, date_to, date_col=date_col)
 
     if tenant_id:
         query = query.where(Order.tenant_id == tenant_id)
@@ -981,6 +992,7 @@ async def get_order_archive_data(
     order_type: Optional[OrderType] = None,
     include_children: bool = True,
     child_only: bool = False,
+    date_basis: str = "order",
 ) -> list[dict]:
     """Lightweight, one-row-per-order archive report.
 
@@ -1005,7 +1017,8 @@ async def get_order_archive_data(
     elif not include_children:
         query = query.where(Order.parent_order_id == None)  # noqa
 
-    query = _date_filters(query, Order, date_from, date_to)
+    date_col = Order.billed_at if date_basis == "billed" else Order.created_at
+    query = _date_filters(query, Order, date_from, date_to, date_col=date_col)
 
     if tenant_id:
         query = query.where(Order.tenant_id == tenant_id)

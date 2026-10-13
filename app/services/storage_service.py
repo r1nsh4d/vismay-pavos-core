@@ -102,8 +102,8 @@ async def delete_variant_image(image_url: str | None, thumbnail_url: str | None)
             pass
         
 
-async def upload_apk(file_bytes: bytes, version_code: int) -> tuple[str, str]:
-    key = f"apk/vismay-v{version_code}.apk"
+async def upload_apk(file_bytes: bytes, version: str) -> tuple[str, str]:
+    key = f"apk/vismay-v{version}.apk"
     s3_client = _get_s3_client()
     s3_client.put_object(
         Bucket=settings.HETZNER_BUCKET,

@@ -92,22 +92,30 @@ CREATE DATABASE "$PGDB";
 SQL
 
 # ── 3. restore the dump ─────────────────────────────────────────────────────────
+# Copy the dump INTO the container and restore from a file path rather than piping
+# it over stdin: `docker compose exec -T` truncates binary stdin on some versions,
+# which shows up as "pg_restore: could not read from input file: end of file".
+echo ">> Copying dump into the postgres container..."
+CONTAINER_DUMP="/tmp/$(basename "$DUMP")"
+$DC cp "$DUMP" "postgres:$CONTAINER_DUMP"
+
 echo ">> Restoring dump into '$PGDB'..."
 case "$DUMP" in
   *.gz)
-    gunzip -c "$DUMP" | $DC exec -T -e PGPASSWORD="$PGPASS" postgres \
-      psql -U "$PGUSER" -d "$PGDB" -v ON_ERROR_STOP=1
+    $DC exec -T -e PGPASSWORD="$PGPASS" postgres \
+      sh -c "gunzip -c '$CONTAINER_DUMP' | psql -U '$PGUSER' -d '$PGDB' -v ON_ERROR_STOP=1"
     ;;
   *.sql)
     $DC exec -T -e PGPASSWORD="$PGPASS" postgres \
-      psql -U "$PGUSER" -d "$PGDB" -v ON_ERROR_STOP=1 < "$DUMP"
+      psql -U "$PGUSER" -d "$PGDB" -v ON_ERROR_STOP=1 -f "$CONTAINER_DUMP"
     ;;
   *)
     # custom / directory / tar format produced by `pg_dump -Fc` (or -Fd/-Ft)
     $DC exec -T -e PGPASSWORD="$PGPASS" postgres \
-      pg_restore -U "$PGUSER" -d "$PGDB" --no-owner --no-privileges < "$DUMP"
+      pg_restore -U "$PGUSER" -d "$PGDB" --no-owner --no-privileges "$CONTAINER_DUMP"
     ;;
 esac
+$DC exec -T postgres rm -f "$CONTAINER_DUMP" || true
 echo ">> Restore complete."
 
 # ── 4. start the app (+ pgadmin) ────────────────────────────────────────────────

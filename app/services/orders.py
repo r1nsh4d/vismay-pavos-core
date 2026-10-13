@@ -574,6 +574,7 @@ async def split_order(
         )
 
     # ── 2. Create the new (child or sibling) order shell ─────────────────
+    is_child = split_input.create_as == "child"
     new_order = Order(
         order_number=await _generate_order_number(db),
         tenant_id=order.tenant_id,
@@ -581,7 +582,7 @@ async def split_order(
         created_by=created_by,
         assigned_executive=order.assigned_executive,
         distributor_id=order.distributor_id,
-        parent_order_id=order.id if split_input.create_as == "child" else None,
+        parent_order_id=order.id if is_child else None,
         order_type=order.order_type,
         price_type=order.price_type,
         status=OrderStatus.approved,
@@ -594,6 +595,15 @@ async def split_order(
         stock_deducted=True,
         notes=split_input.notes or f"Split from {order.order_number}",
     )
+    # A split CHILD is the same commercial order as its parent, just fulfilled in
+    # parts later. Inherit the parent's order date so the whole split family reports
+    # in the month the ORIGINAL order arrived — not the month the split happened.
+    # (The split moment itself is still captured in `placed_at` for audit.) Because
+    # every child inherits from its parent, nested splits chain back to the root date.
+    # Siblings (create_as="sibling") are deliberately standalone orders, so they keep
+    # their own creation date and appear as fresh orders in the split month.
+    if is_child:
+        new_order.created_at = order.created_at
     db.add(new_order)
     await db.flush()
 

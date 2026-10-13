@@ -4,9 +4,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import require_roles
+from app.dependencies import require_roles, get_current_user
 from app.schemas.common import CommonResponse, ResponseModel
 from app.models.order import OrderStatus
+from app.models.user import User
 from app.services import dashboard as dash_svc
 from app.services.report_export import generate_excel
 from app.routers.reports import excel_response, _now_str
@@ -17,11 +18,33 @@ router = APIRouter(
     dependencies=[Depends(require_roles("super_admin", "admin", "scm_user"))],
 )
 
+# Self-service dashboard — any authenticated user, scoped to their OWN data only.
+# Used by the mobile app so an executive can see their own earnings vs targets.
+me_router = APIRouter(prefix="/dashboard/me", tags=["Dashboard — Self"])
+
 
 def _default_range(date_from: date | None, date_to: date | None) -> tuple[date, date]:
     """Default an unset date range to today, so the dashboard shows current-day data."""
     today = datetime.now(timezone.utc).date()
     return (date_from or today, date_to or today)
+
+
+@me_router.get("/earnings", response_model=CommonResponse)
+async def my_earnings(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The logged-in user's OWN earnings — tenant → category → product vs their targets.
+
+    Mobile app endpoint for an executive to see their own performance. Scoped to the
+    caller's user id, so no role gate is needed; it can only ever return the caller's
+    own data. Defaults to today when no dates are given.
+    """
+    date_from, date_to = _default_range(date_from, date_to)
+    data = await dash_svc.get_executive_earnings(db, current_user.id, date_from, date_to)
+    return ResponseModel(data=data, message="My earnings fetched")
 
 
 @router.get("/orders/summary", response_model=CommonResponse)
@@ -205,6 +228,25 @@ async def kpi_shops(
     date_from, date_to = _default_range(date_from, date_to)
     data = await dash_svc.get_shop_kpis(db, date_from, date_to, district_id, tenant_id, limit)
     return ResponseModel(data=data, message="Shop KPIs fetched")
+
+
+@router.get("/executives/{user_id}/earnings", response_model=CommonResponse)
+async def executive_earnings(
+    user_id: uuid.UUID,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """One executive's earnings broken down by tenant → category → product, each measured
+    against that executive's tenant and category targets. Defaults to today when no dates.
+
+    Shape: `{ totals, byTenant: [{ tenant, orders, value, pieces, orderValueTarget,
+    valueAchievement, …, byCategory: [{ category, pieces, value, targetPieces,
+    targetValue, …, byProduct: [{ product, pieces, value }] }] }] }`.
+    """
+    date_from, date_to = _default_range(date_from, date_to)
+    data = await dash_svc.get_executive_earnings(db, user_id, date_from, date_to)
+    return ResponseModel(data=data, message="Executive earnings fetched")
 
 
 @router.get("/executives/{user_id}/route", response_model=CommonResponse)

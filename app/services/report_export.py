@@ -438,8 +438,11 @@ def build_sales_order_pdf(order: dict, show_amounts: bool = True) -> bytes:
         f"Order date: {_date(order.get('createdAt'))}<br/>"
         f"Status: {str(order.get('status','')).upper()}"
     )
+    # Company brand "VISMAY" shown on top, with the tenant name beneath it.
+    tenant_name = order.get("tenantName") or ""
     brand_cell = [
-        Paragraph(order.get("tenantName") or "Sales Order", s["brand"]),
+        Paragraph("VISMAY", s["brand"]),
+        Paragraph(tenant_name, s["brand_sub"]) if tenant_name else Paragraph("", s["brand_sub"]),
         Paragraph(f"Distributed via {order.get('distributorName') or '-'}", s["brand_sub"]),
     ]
     head = Table([[brand_cell,

@@ -10,7 +10,6 @@ from app.schemas.user import UserCreate
 from app.schemas.common import CommonResponse, ErrorResponseModel, ResponseModel, ErrorResponse
 from app.services import auth as auth_mgmt
 from app.services import users as user_mgmt
-from app.services import app_version as app_version_mgmt
 from app.services.users import serialize_user
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -27,28 +26,11 @@ async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
 
 @router.post("/login", response_model=CommonResponse)
 async def login(login_in: LoginRequest, db: AsyncSession = Depends(get_db)):
-    if login_in.client_type == "android":
-        if login_in.app_version_code is None:
-            raise AppException(
-                status_code=400,
-                detail="App version is required",
-                error_code="APP_VERSION_REQUIRED",
-            )
-
-        latest = await app_version_mgmt.get_latest_active_version(db)
-        if latest and login_in.app_version_code < latest.min_required_version_code:
-            exc = AppException(
-                status_code=426,
-                detail="Please update the app to continue",
-                error_code="APP_UPDATE_REQUIRED",
-            )
-            exc.data = {
-                "apkUrl": latest.apk_url,
-                "latestVersionCode": latest.version_code,
-                "latestVersionName": latest.version_name,
-            }
-            raise exc
-
+    # Version gating is handled by the dedicated, string-version endpoints
+    # (GET /app-version/latest and POST /app-version/check) — the mobile app polls
+    # those to decide whether to prompt / force an update. Login no longer gates on
+    # version, so it never blocks or errors on it. `app_version_code` / `client_type`
+    # are still accepted in the request for backward compatibility; they are ignored here.
     user = await auth_mgmt.authenticate(db, login_in.login, login_in.password)
     if not user:
         raise AppException(status_code=400, detail="Invalid credentials")

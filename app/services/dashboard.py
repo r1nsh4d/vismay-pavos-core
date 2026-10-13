@@ -697,6 +697,192 @@ async def get_executive_kpis(db: AsyncSession, date_from, date_to, tenant_id=Non
     return result
 
 
+async def get_executive_earnings(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+) -> dict:
+    """Earnings for ONE executive, broken down by tenant → category → product, each
+    measured against that executive's targets for the tenant / category.
+
+    Totals include split-child orders — their moved-out value belongs to this executive
+    too, and children inherit the root order's date so the date filter stays consistent.
+    """
+    exec_user = await db.scalar(
+        select(User).where(User.id == user_id, User.is_deleted == False)  # noqa
+    )
+    if not exec_user:
+        raise AppException(status_code=404, detail="Executive not found")
+
+    ofilters = [
+        Order.is_deleted == False, Order.assigned_executive == user_id,  # noqa
+        *_created_between(date_from, date_to),
+    ]
+
+    # ── Tenant-level totals: order count + value (from the Order table) ──
+    tenant_rows = (await db.execute(
+        select(
+            Order.tenant_id, func.count(Order.id),
+            func.coalesce(func.sum(Order.total_amount), 0),
+        ).where(*ofilters).group_by(Order.tenant_id)
+    )).all()
+    tenant_orders = {r[0]: (int(r[1]), float(r[2])) for r in tenant_rows}
+
+    # tenant-level pieces (from line items)
+    tpiece_rows = (await db.execute(
+        select(Order.tenant_id, func.coalesce(func.sum(OrderItem.count), 0))
+        .select_from(OrderItem).join(Order, OrderItem.order_id == Order.id)
+        .where(*ofilters).group_by(Order.tenant_id)
+    )).all()
+    tenant_pieces = {r[0]: int(r[1]) for r in tpiece_rows}
+
+    # ── Category → product breakdown per tenant (from line items) ──
+    cp_rows = (await db.execute(
+        select(
+            Order.tenant_id, Category.id, Category.name,
+            Product.id, Product.name,
+            func.coalesce(func.sum(OrderItem.count), 0),
+            func.coalesce(func.sum(OrderItem.total_price), 0),
+        )
+        .select_from(OrderItem)
+        .join(Order, OrderItem.order_id == Order.id)
+        .join(Product, OrderItem.product_id == Product.id)
+        .join(Category, Product.category_id == Category.id)
+        .where(*ofilters)
+        .group_by(Order.tenant_id, Category.id, Category.name, Product.id, Product.name)
+    )).all()
+
+    # nest: {tenant_id: {cat_id: {name, pieces, value, _prod: {prod_id: {...}}}}}
+    tcats: dict = {}
+    for tid, cid, cname, pid, pname, pieces, value in cp_rows:
+        pieces, value = int(pieces), round(float(value), 2)
+        cat = tcats.setdefault(tid, {}).setdefault(str(cid), {
+            "categoryId": str(cid), "category": cname, "pieces": 0, "value": 0.0, "_prod": {},
+        })
+        cat["pieces"] += pieces
+        cat["value"] = round(cat["value"] + value, 2)
+        cat["_prod"][str(pid)] = {
+            "productId": str(pid), "product": pname, "pieces": pieces, "value": value,
+        }
+
+    # ── Targets (summed over the months the range spans), per tenant ──
+    #   order_count / order_value / order_pieces  → tenant-level targets (category_id NULL)
+    #   category_quantity / category_value        → per-category piece / value targets
+    overall_targets: dict = {}    # {tenant_id: {target_type: value}}
+    cat_piece_targets: dict = {}  # {tenant_id: {cat_id: value}}
+    cat_value_targets: dict = {}
+    if date_from and date_to:
+        months = _months_in_range(date_from, date_to)
+        month_cond = or_(*[and_(ExecutiveTarget.year == y, ExecutiveTarget.month == m) for (y, m) in months])
+        tbase = [ExecutiveTarget.user_id == user_id, ExecutiveTarget.is_deleted == False, month_cond]  # noqa
+
+        for tid, ttype, tval in (await db.execute(
+            select(ExecutiveTarget.tenant_id, ExecutiveTarget.target_type,
+                   func.coalesce(func.sum(ExecutiveTarget.target_value), 0))
+            .where(*tbase, ExecutiveTarget.category_id.is_(None))
+            .group_by(ExecutiveTarget.tenant_id, ExecutiveTarget.target_type)
+        )).all():
+            overall_targets.setdefault(tid, {})[ttype] = float(tval)
+
+        for tid, cid, ttype, tval in (await db.execute(
+            select(ExecutiveTarget.tenant_id, ExecutiveTarget.category_id, ExecutiveTarget.target_type,
+                   func.coalesce(func.sum(ExecutiveTarget.target_value), 0))
+            .where(*tbase,
+                   ExecutiveTarget.target_type.in_([TargetType.category_quantity, TargetType.category_value]),
+                   ExecutiveTarget.category_id.isnot(None))
+            .group_by(ExecutiveTarget.tenant_id, ExecutiveTarget.category_id, ExecutiveTarget.target_type)
+        )).all():
+            if ttype == TargetType.category_quantity:
+                cat_piece_targets.setdefault(tid, {})[str(cid)] = float(tval)
+            else:
+                cat_value_targets.setdefault(tid, {})[str(cid)] = float(tval)
+
+    # ── Resolve tenant + category names (incl. target-only entities with no sales) ──
+    tenant_ids = (set(tenant_orders) | set(tcats) | set(overall_targets)
+                  | set(cat_piece_targets) | set(cat_value_targets))
+    tenant_ids.discard(None)
+    tenant_name_map: dict = {}
+    if tenant_ids:
+        for tid, tname in (await db.execute(
+            select(Tenant.id, Tenant.name).where(Tenant.id.in_(tenant_ids))
+        )).all():
+            tenant_name_map[tid] = tname
+
+    target_cat_ids: set = set()
+    for d in (cat_piece_targets, cat_value_targets):
+        for cats in d.values():
+            target_cat_ids.update(cats.keys())
+    cat_name_map: dict = {}
+    if target_cat_ids:
+        for cid, cname in (await db.execute(
+            select(Category.id, Category.name).where(Category.id.in_([uuid.UUID(c) for c in target_cat_ids]))
+        )).all():
+            cat_name_map[str(cid)] = cname
+
+    def _pct(actual, target):
+        return round(actual / target * 100, 2) if target else None
+
+    # ── Assemble the nested payload ──
+    by_tenant = []
+    for tid in sorted(tenant_ids, key=lambda t: tenant_orders.get(t, (0, 0.0))[1], reverse=True):
+        o_count, o_value = tenant_orders.get(tid, (0, 0.0))
+        pieces = tenant_pieces.get(tid, 0)
+        ot = overall_targets.get(tid, {})
+        ct_p = cat_piece_targets.get(tid, {})
+        ct_v = cat_value_targets.get(tid, {})
+
+        cats = tcats.get(tid, {})
+        present = set(cats.keys())
+        cat_list = []
+        for cid, c in cats.items():
+            tp, tv = ct_p.get(cid), ct_v.get(cid)
+            cat_list.append({
+                "categoryId": cid, "category": c["category"],
+                "pieces": c["pieces"], "value": c["value"],
+                "targetPieces": tp, "pieceAchievement": _pct(c["pieces"], tp),
+                "targetValue": tv, "valueAchievement": _pct(c["value"], tv),
+                "byProduct": sorted(c["_prod"].values(), key=lambda p: p["value"], reverse=True),
+            })
+        # categories that carry a target but had no sales → show as 0
+        for cid in (set(ct_p) | set(ct_v)) - present:
+            tp, tv = ct_p.get(cid), ct_v.get(cid)
+            cat_list.append({
+                "categoryId": cid, "category": cat_name_map.get(cid, ""),
+                "pieces": 0, "value": 0.0,
+                "targetPieces": tp, "pieceAchievement": _pct(0, tp),
+                "targetValue": tv, "valueAchievement": _pct(0, tv),
+                "byProduct": [],
+            })
+        cat_list.sort(key=lambda c: c["value"], reverse=True)
+
+        by_tenant.append({
+            "tenantId": str(tid), "tenant": tenant_name_map.get(tid, ""),
+            "orders": o_count, "value": round(o_value, 2), "pieces": pieces,
+            "orderCountTarget": ot.get(TargetType.order_count, 0),
+            "countAchievement": _pct(o_count, ot.get(TargetType.order_count)),
+            "orderValueTarget": ot.get(TargetType.order_value, 0),
+            "valueAchievement": _pct(o_value, ot.get(TargetType.order_value)),
+            "orderPiecesTarget": ot.get(TargetType.order_pieces, 0),
+            "piecesAchievement": _pct(pieces, ot.get(TargetType.order_pieces)),
+            "byCategory": cat_list,
+        })
+
+    grand_orders = sum(v[0] for v in tenant_orders.values())
+    grand_value = round(sum(v[1] for v in tenant_orders.values()), 2)
+    grand_pieces = sum(tenant_pieces.values())
+
+    return {
+        "userId": str(exec_user.id),
+        "name": f"{exec_user.first_name} {exec_user.last_name or ''}".strip(),
+        "phone": exec_user.phone,
+        "dateFrom": str(date_from) if date_from else None,
+        "dateTo": str(date_to) if date_to else None,
+        "totals": {"orders": grand_orders, "value": grand_value, "pieces": grand_pieces},
+        "byTenant": by_tenant,
+    }
+
+
 async def get_distributor_kpis(db: AsyncSession, date_from, date_to, tenant_id=None) -> list[dict]:
     """Per-distributor KPIs — orders handled, delivered, value, pieces for the range."""
     dist_q = (

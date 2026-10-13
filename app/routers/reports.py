@@ -218,6 +218,7 @@ async def orders_excel(
     order_type: OrderType | None = None,
     include_children: bool = True,
     child_only: bool = False,
+    date_basis: str = "order",
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -241,6 +242,7 @@ async def orders_excel(
         order_type=order_type,
         include_children=include_children,
         child_only=child_only,
+        date_basis=date_basis,
     )
     return excel_response(
         generate_excel(
@@ -267,22 +269,9 @@ async def orders_excel(
                 "Tracking Number",
                 "Boxes Dispatched",
                 "Delivery Notes",
-                "Placed At",
-                "Verified At",
-                "Assigned At",
-                "Approved At",
-                "Estimated At",
-                "Billed At",
-                "Packing At",
-                "Dispatched At",
-                "Delivered At",
-                "Cancelled At",
-                "Rejected At",
-                "Returned At",
-                "Booking Date",
-                "Delivery Date",
-                "Warehouse TAT (days)",
-                "Delivery TAT (days)",
+                # NOTE: the status-date columns (Placed At … Returned At, Booking Date,
+                # Delivery Date) and the TAT columns are intentionally NOT merged, so the
+                # date is printed against every line item of the order, not just the first row.
                 ),
         ),
         f"orders_{_now_str()}",
@@ -304,6 +293,7 @@ async def orders_pdf(
     order_type: OrderType | None = None,
     include_children: bool = True,
     child_only: bool = False,
+    date_basis: str = "order",
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -327,6 +317,7 @@ async def orders_pdf(
         order_type=order_type,
         include_children=include_children,
         child_only=child_only,
+        date_basis=date_basis,
     )
     ORDER_COL_WEIGHTS = {
         "Order Number": 1.5, "Date": 1, "Type": 0.8, "Price Type": 0.6,
@@ -359,6 +350,7 @@ async def orders_archive_excel(
     order_type: OrderType | None = None,
     include_children: bool = True,
     child_only: bool = False,
+    date_basis: str = "order",
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -383,6 +375,7 @@ async def orders_archive_excel(
         order_type=order_type,
         include_children=include_children,
         child_only=child_only,
+        date_basis=date_basis,
     )
     return excel_response(
         generate_excel(rows, "Order Archive"),
@@ -405,6 +398,7 @@ async def orders_archive_pdf(
     order_type: OrderType | None = None,
     include_children: bool = True,
     child_only: bool = False,
+    date_basis: str = "order",
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -424,6 +418,7 @@ async def orders_archive_pdf(
         order_type=order_type,
         include_children=include_children,
         child_only=child_only,
+        date_basis=date_basis,
     )
     ARCHIVE_COL_WEIGHTS = {
         "Order Number": 1.4, "Bill Number": 1.0, "Secondary Bill Number": 1.2,
