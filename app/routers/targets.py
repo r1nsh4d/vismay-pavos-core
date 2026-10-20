@@ -58,10 +58,12 @@ async def get_all_executives_summary(
 async def get_my_achievement(
     year: int | None = None,
     month: int | None = None,
+    tenant_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Executive checks their own achievement.
+    """Executive checks their own achievement. Pass `tenant_id` to scope to one tenant
+    (targets are per tenant); omit it to aggregate across all the executive's tenants.
 
     NOTE: this literal route MUST stay above the `/{user_id}` routes — otherwise
     Starlette matches `/{user_id}` first and tries to parse "my" as a UUID (→ 422).
@@ -72,6 +74,7 @@ async def get_my_achievement(
         user_id=current_user.id,
         year=year or now.year,
         month=month or now.month,
+        tenant_id=tenant_id,
     )
     return ResponseModel(data=summary, message="My achievement fetched")
 
@@ -81,16 +84,19 @@ async def get_targets(
     user_id: uuid.UUID,
     year: int | None = None,
     month: int | None = None,
+    tenant_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get all targets set for an executive for a given month."""
+    """Get targets set for an executive for a month. Pass `tenant_id` to list only that
+    tenant's targets (so the Manage panel matches the tenant-scoped achievement columns)."""
     now = datetime.utcnow()
     targets = await target_svc.get_targets_by_user(
         db,
         user_id=user_id,
         year=year or now.year,
         month=month or now.month,
+        tenant_id=tenant_id,
     )
     return ResponseModel(
         data=[target_svc.serialize_target(t) for t in targets],
@@ -103,16 +109,18 @@ async def get_achievement(
     user_id: uuid.UUID,
     year: int | None = None,
     month: int | None = None,
+    tenant_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get achievement vs targets for an executive."""
+    """Get achievement vs targets for an executive. Pass `tenant_id` to scope to one tenant."""
     now = datetime.utcnow()
     summary = await target_svc.get_achievement_summary(
         db,
         user_id=user_id,
         year=year or now.year,
         month=month or now.month,
+        tenant_id=tenant_id,
     )
     return ResponseModel(data=summary, message="Achievement fetched")
 

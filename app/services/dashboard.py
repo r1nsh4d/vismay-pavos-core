@@ -715,19 +715,37 @@ async def get_executive_earnings(
     if not exec_user:
         raise AppException(status_code=404, detail="Executive not found")
 
+    # Exclude rejected / returned / cancelled so earnings match the Targets achievement
+    # page (which uses the same exclusion). Without this the two screens disagree.
+    excluded = [OrderStatus.rejected, OrderStatus.returned, OrderStatus.cancelled]
     ofilters = [
         Order.is_deleted == False, Order.assigned_executive == user_id,  # noqa
+        Order.status.not_in(excluded),
         *_created_between(date_from, date_to),
     ]
 
-    # ── Tenant-level totals: order count + value (from the Order table) ──
-    tenant_rows = (await db.execute(
-        select(
-            Order.tenant_id, func.count(Order.id),
-            func.coalesce(func.sum(Order.total_amount), 0),
-        ).where(*ofilters).group_by(Order.tenant_id)
+    # ── Tenant-level totals ──
+    # Value (and pieces/category below) INCLUDE split children — their moved-out value
+    # belongs to this executive (parent + children = the original total).
+    tenant_val_rows = (await db.execute(
+        select(Order.tenant_id, func.coalesce(func.sum(Order.total_amount), 0))
+        .where(*ofilters).group_by(Order.tenant_id)
     )).all()
-    tenant_orders = {r[0]: (int(r[1]), float(r[2])) for r in tenant_rows}
+    tenant_value = {r[0]: float(r[1]) for r in tenant_val_rows}
+
+    # Order COUNT counts root arrivals only, so splits don't inflate it (matches the
+    # achievement page's order-count logic).
+    tenant_count_rows = (await db.execute(
+        select(Order.tenant_id, func.count(Order.id))
+        .where(*ofilters, Order.parent_order_id == None)  # noqa
+        .group_by(Order.tenant_id)
+    )).all()
+    tenant_count = {r[0]: int(r[1]) for r in tenant_count_rows}
+
+    tenant_orders = {
+        tid: (tenant_count.get(tid, 0), tenant_value.get(tid, 0.0))
+        for tid in set(tenant_value) | set(tenant_count)
+    }
 
     # tenant-level pieces (from line items)
     tpiece_rows = (await db.execute(

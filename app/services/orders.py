@@ -244,71 +244,77 @@ async def _get_available_bundle(
     return min_available or 0
 
 
+async def _set_qty(db: AsyncSession, set_type_id) -> int:
+    """Pieces per set (`set_type.total_pieces`).
+
+    OrderItem.count (and ri.count / diff) are stored in PIECES, while bundle stock maths
+    work in SETS. This converts: sets = pieces // set_qty. Orders are always whole sets,
+    so the division is exact.
+    """
+    st = await db.scalar(select(SetType).where(SetType.id == set_type_id))
+    return int(st.total_pieces) if st and st.total_pieces else 0
+
+
+async def _apply_bundle_stock(
+    db: AsyncSession, item: OrderItem, pieces: int, sign: int
+) -> None:
+    """Add (sign=+1) or remove (sign=-1) bundle stock for `pieces` worth of an item.
+
+    `pieces` is converted to whole sets first, then each size's bundle_count is moved by
+    `sets * si.quantity` — so returning 1 box of 8 pieces moves exactly 1 set, not 8.
+    """
+    set_qty = await _set_qty(db, item.set_type_id)
+    sets = pieces // set_qty if set_qty else 0
+    if not sets:
+        return
+    size_items = (await db.execute(
+        select(SetTypeItem).where(SetTypeItem.set_type_id == item.set_type_id)
+    )).scalars().all()
+    for si in size_items:
+        variant = await db.scalar(
+            select(ProductVariant).where(
+                ProductVariant.product_id == item.product_id,
+                ProductVariant.size == si.size,
+            )
+        )
+        if not variant:
+            continue
+        stock = await db.scalar(
+            select(Stock).where(Stock.variant_id == variant.id)
+            .options(selectinload(Stock.bundle_stocks))
+        )
+        if not stock:
+            continue
+        bundle_stock = next(
+            (bs for bs in stock.bundle_stocks if bs.set_type_id == item.set_type_id), None
+        )
+        if bundle_stock:
+            bundle_stock.bundle_count += sign * sets * si.quantity
+
+
 async def _deduct_stock_for_item(
     db: AsyncSession, item: OrderItem, order_type: OrderType, count: int
 ) -> None:
+    # `count` is in PIECES (OrderItem.count is stored in pieces for both order types).
     if order_type == OrderType.individual:
         stock = await db.scalar(select(Stock).where(Stock.variant_id == item.variant_id))
         if stock:
             stock.individual_count -= count
     elif order_type == OrderType.bundle:
-        size_items = (await db.execute(
-            select(SetTypeItem).where(SetTypeItem.set_type_id == item.set_type_id)
-        )).scalars().all()
-        for si in size_items:
-            variant = await db.scalar(
-                select(ProductVariant).where(
-                    ProductVariant.product_id == item.product_id,
-                    ProductVariant.size == si.size,
-                )
-            )
-            if not variant:
-                continue
-            stock = await db.scalar(
-                select(Stock).where(Stock.variant_id == variant.id)
-                .options(selectinload(Stock.bundle_stocks))
-            )
-            if not stock:
-                continue
-            bundle_stock = next(
-                (bs for bs in stock.bundle_stocks if bs.set_type_id == item.set_type_id), None
-            )
-            if bundle_stock:
-                bundle_stock.bundle_count -= count * si.quantity
+        await _apply_bundle_stock(db, item, count, sign=-1)
     await db.flush()
 
 
 async def _restore_stock_for_item(
     db: AsyncSession, item: OrderItem, order_type: OrderType, count: int
 ) -> None:
+    # `count` is in PIECES (mirror of _deduct_stock_for_item).
     if order_type == OrderType.individual:
         stock = await db.scalar(select(Stock).where(Stock.variant_id == item.variant_id))
         if stock:
             stock.individual_count += count
     elif order_type == OrderType.bundle:
-        size_items = (await db.execute(
-            select(SetTypeItem).where(SetTypeItem.set_type_id == item.set_type_id)
-        )).scalars().all()
-        for si in size_items:
-            variant = await db.scalar(
-                select(ProductVariant).where(
-                    ProductVariant.product_id == item.product_id,
-                    ProductVariant.size == si.size,
-                )
-            )
-            if not variant:
-                continue
-            stock = await db.scalar(
-                select(Stock).where(Stock.variant_id == variant.id)
-                .options(selectinload(Stock.bundle_stocks))
-            )
-            if not stock:
-                continue
-            bundle_stock = next(
-                (bs for bs in stock.bundle_stocks if bs.set_type_id == item.set_type_id), None
-            )
-            if bundle_stock:
-                bundle_stock.bundle_count += count * si.quantity
+        await _apply_bundle_stock(db, item, count, sign=+1)
     await db.flush()
 
 
@@ -374,8 +380,9 @@ async def create_bundle_order(
     await db.flush()
     _recalculate_totals(order, items=[oi for oi, _ in order_items])
 
-    for oi, bundle_count in order_items:
-        await _deduct_stock_for_item(db, oi, OrderType.bundle, bundle_count)
+    for oi, _bundle_count in order_items:
+        # oi.count is in PIECES (sets × set_qty); the helper converts back to sets.
+        await _deduct_stock_for_item(db, oi, OrderType.bundle, oi.count)
 
     order.stock_deducted = True
     await db.flush()
@@ -930,57 +937,42 @@ async def _restore_stock_by_return_type(
     return_type: ReturnType,
     count: int,
 ) -> None:
+    # `count` is in PIECES (OrderReturn.count mirrors OrderItem.count).
     if return_type == ReturnType.individual:
         if order_item.variant_id:
+            # True individual item — count is pieces, restore directly.
             stock = await db.scalar(
                 select(Stock).where(Stock.variant_id == order_item.variant_id)
             )
             if stock:
                 stock.individual_count += count
         else:
-            size_items = (await db.execute(
-                select(SetTypeItem).where(SetTypeItem.set_type_id == order_item.set_type_id)
-            )).scalars().all()
-            for si in size_items:
-                variant = await db.scalar(
-                    select(ProductVariant).where(
-                        ProductVariant.product_id == order_item.product_id,
-                        ProductVariant.size == si.size,
+            # Bundle item returned as loose pieces — convert pieces → sets first, then
+            # restore sets × si.quantity pieces of each size to individual stock.
+            set_qty = await _set_qty(db, order_item.set_type_id)
+            sets = count // set_qty if set_qty else 0
+            if sets:
+                size_items = (await db.execute(
+                    select(SetTypeItem).where(SetTypeItem.set_type_id == order_item.set_type_id)
+                )).scalars().all()
+                for si in size_items:
+                    variant = await db.scalar(
+                        select(ProductVariant).where(
+                            ProductVariant.product_id == order_item.product_id,
+                            ProductVariant.size == si.size,
+                        )
                     )
-                )
-                if not variant:
-                    continue
-                stock = await db.scalar(
-                    select(Stock).where(Stock.variant_id == variant.id)
-                )
-                if stock:
-                    stock.individual_count += count * si.quantity
+                    if not variant:
+                        continue
+                    stock = await db.scalar(
+                        select(Stock).where(Stock.variant_id == variant.id)
+                    )
+                    if stock:
+                        stock.individual_count += sets * si.quantity
 
     elif return_type == ReturnType.bundle:
-        size_items = (await db.execute(
-            select(SetTypeItem).where(SetTypeItem.set_type_id == order_item.set_type_id)
-        )).scalars().all()
-        for si in size_items:
-            variant = await db.scalar(
-                select(ProductVariant).where(
-                    ProductVariant.product_id == order_item.product_id,
-                    ProductVariant.size == si.size,
-                )
-            )
-            if not variant:
-                continue
-            stock = await db.scalar(
-                select(Stock).where(Stock.variant_id == variant.id)
-                .options(selectinload(Stock.bundle_stocks))
-            )
-            if not stock:
-                continue
-            bundle_stock = next(
-                (bs for bs in stock.bundle_stocks
-                 if bs.set_type_id == order_item.set_type_id), None
-            )
-            if bundle_stock:
-                bundle_stock.bundle_count += count * si.quantity
+        # Restore whole sets back to bundle stock (pieces → sets handled inside).
+        await _apply_bundle_stock(db, order_item, count, sign=+1)
 
     await db.flush()
 
