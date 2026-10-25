@@ -7,16 +7,55 @@ from sqlalchemy.orm import selectinload
 
 from app.models.order import (
     Order, OrderItem, OrderReturn, OrderStatus, OrderType,
-    ReturnType, PriceType, CANCELLABLE_STATUSES, STOCK_RESTORE_STATUSES,
+    ReturnType, PriceType, VisitType, CANCELLABLE_STATUSES, STOCK_RESTORE_STATUSES,
 )
 from app.models.product import Product, ProductVariant
 from app.models.set_type import SetType, SetTypeItem
 from app.models.stock import Stock, BundleStock
+from app.models.shop import Shop
 from app.schemas.order import (
     BundleOrderCreate, IndividualOrderCreate,
     SplitOrderInput, CreateOrderReturnInput,
 )
 from app.core.exceptions import AppException
+from app.config import settings
+from app.services.attendance import _haversine_km
+
+
+async def _derive_order_location(db: AsyncSession, shop_id, lat, lng, accuracy):
+    """From the order's capture GPS, work out the distance to the shop and whether it
+    counts as on-site. Returns (visit_type, distance_m) — both None if we can't tell
+    (no order location, or the shop has no coordinates yet).
+
+    on_site when within SHOP_ENTRY_MAX_DISTANCE_M (plus GPS accuracy slack) of the shop,
+    otherwise off_site — the same geofence used for shop check-in.
+    """
+    if lat is None or lng is None:
+        return None, None
+    shop = await db.scalar(select(Shop).where(Shop.id == shop_id))
+    addr = dict(shop.address or {}) if shop else {}
+    slat, slng = addr.get("latitude"), addr.get("longitude")
+    if slat is None or slng is None:
+        return None, None
+    distance_m = _haversine_km(float(slat), float(slng), float(lat), float(lng)) * 1000.0
+    allowed_m = settings.SHOP_ENTRY_MAX_DISTANCE_M + (accuracy or 0)
+    visit = VisitType.on_site if distance_m <= allowed_m else VisitType.off_site
+    return visit, round(distance_m, 2)
+
+
+async def _apply_order_location(db: AsyncSession, order: Order, data) -> None:
+    """Store the order's capture GPS on the order and set visit_type + distance.
+
+    Falls back to a client-supplied `visit_type` when no location is captured (so the
+    flag still works if the app can't get GPS)."""
+    order.order_lat = data.order_lat
+    order.order_lng = data.order_lng
+    order.order_location_accuracy = data.order_accuracy
+    visit, dist = await _derive_order_location(
+        db, data.shop_id, data.order_lat, data.order_lng, data.order_accuracy
+    )
+    order.order_distance_m = dist
+    order.visit_type = visit if visit is not None else data.visit_type
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -352,6 +391,7 @@ async def create_bundle_order(
     )
     db.add(order)
     await db.flush()
+    await _apply_order_location(db, order, data)
 
     order_items = []
     for item in data.items:
@@ -416,6 +456,7 @@ async def create_individual_order(
     )
     db.add(order)
     await db.flush()
+    await _apply_order_location(db, order, data)
 
     order_items = []
     for item in data.items:
@@ -1195,6 +1236,15 @@ def serialize_order_list(order: Order) -> dict:
         "orderType": order.order_type,
         "status": order.status,
         "priceType": order.price_type,
+        "visitType": order.visit_type,
+        "orderLat": float(order.order_lat) if order.order_lat is not None else None,
+        "orderLng": float(order.order_lng) if order.order_lng is not None else None,
+        "orderLocationAccuracy": float(order.order_location_accuracy) if order.order_location_accuracy is not None else None,
+        "orderDistanceM": float(order.order_distance_m) if order.order_distance_m is not None else None,
+        "orderTakenFrom": (
+            f"https://www.google.com/maps?q={order.order_lat},{order.order_lng}"
+            if order.order_lat is not None and order.order_lng is not None else None
+        ),
         "discountPercent": float(order.discount_percent),
         "discountFlat": float(order.discount_flat),
         "subtotal": float(order.subtotal),
@@ -1234,6 +1284,15 @@ def serialize_order(order: Order) -> dict:
         "orderType": order.order_type,
         "status": order.status,
         "priceType": order.price_type,
+        "visitType": order.visit_type,
+        "orderLat": float(order.order_lat) if order.order_lat is not None else None,
+        "orderLng": float(order.order_lng) if order.order_lng is not None else None,
+        "orderLocationAccuracy": float(order.order_location_accuracy) if order.order_location_accuracy is not None else None,
+        "orderDistanceM": float(order.order_distance_m) if order.order_distance_m is not None else None,
+        "orderTakenFrom": (
+            f"https://www.google.com/maps?q={order.order_lat},{order.order_lng}"
+            if order.order_lat is not None and order.order_lng is not None else None
+        ),
         "discountPercent": float(order.discount_percent),
         "discountFlat": float(order.discount_flat),
         "subtotal": float(order.subtotal),

@@ -9,8 +9,26 @@ from app.schemas.common import CommonResponse, ResponseModel, ErrorResponseModel
 from app.schemas.target import TargetCreate, TargetResponse
 from app.services import targets as target_svc
 from app.models.user import User
+from app.models.order import OrderStatus
 
 router = APIRouter(prefix="/targets", tags=["Targets"])
+
+
+def _parse_statuses(status: str | None) -> list[OrderStatus] | None:
+    """Parse a comma-separated `status` query param into OrderStatus values, ignoring
+    blanks and unknown values. Returns None when nothing usable was given."""
+    if not status:
+        return None
+    out: list[OrderStatus] = []
+    for part in status.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(OrderStatus(part))
+        except ValueError:
+            continue
+    return out or None
 
 
 @router.post("", response_model=CommonResponse)
@@ -40,16 +58,19 @@ async def get_all_executives_summary(
     year: int | None = None,
     month: int | None = None,
     tenant_id: uuid.UUID | None = None,
+    status: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Admin view — all executives and their achievement this month."""
+    """Admin view — all executives and their achievement this month. Pass `status` (one or
+    comma-separated) to count only orders in those statuses."""
     now = datetime.utcnow()
     summaries = await target_svc.get_all_executives_summary(
         db,
         year=year or now.year,
         month=month or now.month,
         tenant_id=tenant_id,
+        statuses=_parse_statuses(status),
     )
     return ResponseModel(data=summaries, message="All executives summary fetched")
 
@@ -59,11 +80,15 @@ async def get_my_achievement(
     year: int | None = None,
     month: int | None = None,
     tenant_id: uuid.UUID | None = None,
+    status: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Executive checks their own achievement. Pass `tenant_id` to scope to one tenant
     (targets are per tenant); omit it to aggregate across all the executive's tenants.
+    Pass `status` (one value or comma-separated, e.g. `delivered` or `billed,delivered`)
+    to count only orders in those statuses; omit it to count all except
+    rejected/returned/cancelled.
 
     NOTE: this literal route MUST stay above the `/{user_id}` routes — otherwise
     Starlette matches `/{user_id}` first and tries to parse "my" as a UUID (→ 422).
@@ -75,6 +100,7 @@ async def get_my_achievement(
         year=year or now.year,
         month=month or now.month,
         tenant_id=tenant_id,
+        statuses=_parse_statuses(status),
     )
     return ResponseModel(data=summary, message="My achievement fetched")
 
@@ -110,10 +136,12 @@ async def get_achievement(
     year: int | None = None,
     month: int | None = None,
     tenant_id: uuid.UUID | None = None,
+    status: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get achievement vs targets for an executive. Pass `tenant_id` to scope to one tenant."""
+    """Get achievement vs targets for an executive. Pass `tenant_id` to scope to one tenant,
+    and `status` (one or comma-separated) to count only orders in those statuses."""
     now = datetime.utcnow()
     summary = await target_svc.get_achievement_summary(
         db,
@@ -121,6 +149,7 @@ async def get_achievement(
         year=year or now.year,
         month=month or now.month,
         tenant_id=tenant_id,
+        statuses=_parse_statuses(status),
     )
     return ResponseModel(data=summary, message="Achievement fetched")
 

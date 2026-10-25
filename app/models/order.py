@@ -38,6 +38,11 @@ class PriceType(str, enum.Enum):
     dp = "dp"
 
 
+class VisitType(str, enum.Enum):
+    on_site = "on_site"      # order taken AT the shop (executive physically visited)
+    off_site = "off_site"    # order taken WITHOUT visiting the shop (remote)
+
+
 CANCELLABLE_STATUSES = {
     OrderStatus.placed,
     OrderStatus.verified,
@@ -83,6 +88,18 @@ class Order(BaseModel):
     price_type: Mapped[PriceType] = mapped_column(
         Enum(PriceType, native_enum=False), default=PriceType.mrp, nullable=False
     )
+    # Whether the order was taken at the shop (on_site) or remotely (off_site). Derived
+    # from the capture location below vs the shop's coordinates. Nullable for older
+    # orders / when no location was captured.
+    visit_type: Mapped[Optional[VisitType]] = mapped_column(
+        Enum(VisitType, native_enum=False), nullable=True
+    )
+    # GPS position where the order was placed ("order taken from"), plus how far that
+    # was from the shop — so admins can verify where each order was actually taken.
+    order_lat: Mapped[Optional[float]] = mapped_column(Numeric(10, 7), nullable=True)
+    order_lng: Mapped[Optional[float]] = mapped_column(Numeric(10, 7), nullable=True)
+    order_location_accuracy: Mapped[Optional[float]] = mapped_column(Numeric(8, 2), nullable=True)
+    order_distance_m: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
 
     discount_percent: Mapped[float] = mapped_column(Numeric(5, 2), default=0, nullable=False)
     discount_flat: Mapped[float] = mapped_column(Numeric(10, 2), default=0, nullable=False)

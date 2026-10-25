@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional, List, Literal
 from datetime import datetime
-from app.models.order import OrderType, OrderStatus, ReturnType, PriceType
+from app.models.order import OrderType, OrderStatus, ReturnType, PriceType, VisitType
 from app.schemas.base import CamelModel
 
 
@@ -26,6 +26,13 @@ class BundleOrderCreate(CamelModel):
     assigned_executive: Optional[uuid.UUID] = None
     notes: Optional[str] = None
     price_type: PriceType = PriceType.mrp
+    # Where the order was taken — the app sends the executive's GPS; the backend derives
+    # visit_type (on_site/off_site) from the distance to the shop. visit_type is an
+    # optional fallback for when no GPS is available.
+    order_lat: Optional[float] = None
+    order_lng: Optional[float] = None
+    order_accuracy: Optional[float] = None
+    visit_type: Optional[VisitType] = None
     items: List[BundleOrderItemCreate]
 
 
@@ -36,6 +43,10 @@ class IndividualOrderCreate(CamelModel):
     assigned_executive: Optional[uuid.UUID] = None
     notes: Optional[str] = None
     price_type: PriceType = PriceType.mrp
+    order_lat: Optional[float] = None
+    order_lng: Optional[float] = None
+    order_accuracy: Optional[float] = None
+    visit_type: Optional[VisitType] = None
     items: List[IndividualOrderItemCreate]
 
 

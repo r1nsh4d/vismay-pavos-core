@@ -19,6 +19,7 @@ from app.services.report_data import (
     _build_executive_wise_excel,
 )
 from app.services.report_export import generate_excel, generate_pdf
+from app.services import pivot as pivot_svc
 from app.schemas.common import CommonResponse, ResponseModel
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
@@ -251,6 +252,10 @@ async def orders_excel(
             merge_key="Order Number",
             merge_cols=(
                 "Order Number",
+                "Order Level",
+                "Visit Type",
+                "Order Taken From",
+                "Distance From Shop (m)",
                 "Bill Number",
                 "Secondary Bill Number",
                 "Type",
@@ -430,6 +435,150 @@ async def orders_archive_pdf(
         generate_pdf(rows, "Order Archive", col_weights=ARCHIVE_COL_WEIGHTS),
         f"order_archive_{_now_str()}",
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DYNAMIC PIVOT
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _pivot_statuses(status: list[str] | None) -> list[OrderStatus] | None:
+    """Parse repeated and/or comma-separated status values, ignoring unknown/blank ones."""
+    if not status:
+        return None
+    out: list[OrderStatus] = []
+    for raw in status:
+        for part in str(raw).split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                out.append(OrderStatus(part))
+            except ValueError:
+                continue
+    return out or None
+
+
+async def _run_pivot(
+    db, source, row_field, col_field, value, value_field, agg, date_grain,
+    date_from, date_to, tenant_id, state_id, district_id, taluk_id, shop_id,
+    distributor_id, assigned_executive, status, order_type,
+    include_children, child_only, date_basis,
+) -> dict:
+    """Shared param → pivot-result for both the Excel and JSON endpoints."""
+    filters = {
+        "date_from": date_from, "date_to": date_to, "tenant_id": tenant_id,
+        "state_id": state_id, "district_id": district_id, "taluk_id": taluk_id,
+        "shop_id": shop_id, "distributor_id": distributor_id,
+        "assigned_executive": assigned_executive, "status": _pivot_statuses(status),
+        "order_type": order_type, "include_children": include_children,
+        "child_only": child_only, "date_basis": date_basis,
+    }
+    value_specs = pivot_svc.parse_values(value, value_field, agg)
+    return await pivot_svc.run_pivot(
+        db,
+        source=source,
+        row_fields=[f for f in (row_field or []) if f],
+        col_fields=[f for f in (col_field or []) if f],
+        value_specs=value_specs,
+        grain=date_grain,
+        filters=filters,
+    )
+
+
+@router.get("/pivot/sources", response_model=CommonResponse)
+async def pivot_sources(current_user: User = Depends(get_current_user)):
+    """Pivot sources with dimensions, measures, aggregations, date grains, filters and
+    limits — the frontend builds the whole form from this (no hardcoding)."""
+    return ResponseModel(data=pivot_svc.list_sources(), message="Pivot sources")
+
+
+@router.get("/pivot/excel")
+async def pivot_excel(
+    source: str,
+    row_field: list[str] = Query(default=[]),
+    col_field: list[str] = Query(default=[]),
+    value: list[str] = Query(default=[]),          # repeated "<agg>[:<field>]"
+    value_field: str | None = None,                # single-value form (backward compat)
+    agg: str = "sum",
+    date_grain: str = "day",
+    totals: bool = True,
+    # shared report filters
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tenant_id: uuid.UUID | None = None,
+    state_id: uuid.UUID | None = None,
+    district_id: uuid.UUID | None = None,
+    taluk_id: uuid.UUID | None = None,
+    shop_id: uuid.UUID | None = None,
+    distributor_id: uuid.UUID | None = None,
+    assigned_executive: uuid.UUID | None = None,
+    status: list[str] = Query(default=[]),         # repeated/comma status (multi-select)
+    order_type: OrderType | None = None,
+    include_children: bool = True,
+    child_only: bool = False,
+    date_basis: str = "order",
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Build a pivot / cross-tab and download it as Excel.
+
+    Repeat `row_field` / `col_field` for nested grouping (max 3 rows, 2 cols). Repeat
+    `value` as `<agg>[:<field>]` for several measures (max 4), or use the single
+    `value_field` + `agg` form. `date_grain` ∈ day|week|month|quarter|year applies to date
+    dimensions. `status` is multi-select. Call `/reports/pivot/sources` for valid names/limits.
+    """
+    result = await _run_pivot(
+        db, source, row_field, col_field, value, value_field, agg, date_grain,
+        date_from, date_to, tenant_id, state_id, district_id, taluk_id, shop_id,
+        distributor_id, assigned_executive, status, order_type,
+        include_children, child_only, date_basis,
+    )
+    rows = pivot_svc.to_excel_rows(result, include_totals=totals)
+    return excel_response(
+        generate_excel(rows, f"Pivot - {source}"),
+        f"pivot_{source}_{_now_str()}",
+    )
+
+
+@router.get("/pivot/json", response_model=CommonResponse)
+async def pivot_json(
+    source: str,
+    row_field: list[str] = Query(default=[]),
+    col_field: list[str] = Query(default=[]),
+    value: list[str] = Query(default=[]),
+    value_field: str | None = None,
+    agg: str = "sum",
+    date_grain: str = "day",
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tenant_id: uuid.UUID | None = None,
+    state_id: uuid.UUID | None = None,
+    district_id: uuid.UUID | None = None,
+    taluk_id: uuid.UUID | None = None,
+    shop_id: uuid.UUID | None = None,
+    distributor_id: uuid.UUID | None = None,
+    assigned_executive: uuid.UUID | None = None,
+    status: list[str] = Query(default=[]),
+    order_type: OrderType | None = None,
+    include_children: bool = True,
+    child_only: bool = False,
+    date_basis: str = "order",
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Same pivot as `/pivot/excel`, returned as structured JSON (for preview / empty-check).
+
+    Shape: { rowFields, colFields, values[{agg,field,label}], columns[{key,label}],
+    rows[{key, cells[[per-value] per column], rowTotal[]}], columnTotals[], grandTotal[],
+    truncated }. All numbers are plain JSON numbers.
+    """
+    result = await _run_pivot(
+        db, source, row_field, col_field, value, value_field, agg, date_grain,
+        date_from, date_to, tenant_id, state_id, district_id, taluk_id, shop_id,
+        distributor_id, assigned_executive, status, order_type,
+        include_children, child_only, date_basis,
+    )
+    return ResponseModel(data=result, message="Pivot computed")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

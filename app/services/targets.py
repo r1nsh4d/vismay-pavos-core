@@ -86,6 +86,7 @@ async def get_achievement_summary(
     year: int,
     month: int,
     tenant_id: Optional[uuid.UUID] = None,
+    statuses: Optional[List[OrderStatus]] = None,
 ) -> dict:
     """Achievement vs targets for an executive in a month.
 
@@ -93,6 +94,10 @@ async def get_achievement_summary(
     page must compare a tenant's orders against that tenant's targets). Handles all five
     target types: order_count / order_value / order_pieces (overall) and
     category_quantity / category_value (per category).
+
+    `statuses`: when given, only orders in those statuses count toward the achieved figures
+    (so the executive can see achievement for e.g. just `delivered` or `billed`). When not
+    given, rejected / returned / cancelled orders are excluded and everything else counts.
 
     Order COUNT counts root arrivals only (split children don't inflate it); order VALUE,
     PIECES and category figures INCLUDE split children, since their moved-out value belongs
@@ -103,10 +108,14 @@ async def get_achievement_summary(
     scope = [
         Order.assigned_executive == user_id,
         Order.is_deleted == False,  # noqa
-        Order.status.not_in(excluded),
         extract("year", Order.created_at) == year,
         extract("month", Order.created_at) == month,
     ]
+    # Chosen statuses override the default exclusion; otherwise drop the non-sale ones.
+    if statuses:
+        scope.append(Order.status.in_(statuses))
+    else:
+        scope.append(Order.status.not_in(excluded))
     if tenant_id:
         scope.append(Order.tenant_id == tenant_id)
 
@@ -233,6 +242,7 @@ async def get_all_executives_summary(
     year: int,
     month: int,
     tenant_id: Optional[uuid.UUID] = None,
+    statuses: Optional[List[OrderStatus]] = None,
 ) -> list[dict]:
     """Get achievement summary for all executives — for admin view."""
     from app.models.user import User
@@ -255,7 +265,7 @@ async def get_all_executives_summary(
 
     summaries = []
     for exe in executives:
-        summary = await get_achievement_summary(db, exe.id, year, month, tenant_id)
+        summary = await get_achievement_summary(db, exe.id, year, month, tenant_id, statuses)
         summary["executiveName"] = f"{exe.first_name} {exe.last_name}".strip()
         summary["username"] = exe.username
         summaries.append(summary)

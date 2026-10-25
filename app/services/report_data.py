@@ -904,6 +904,10 @@ async def get_order_report_data(
 
         order_head = {
             "Order Number": o.order_number,
+            "Order Level": "CHILD" if o.parent_order_id else "PARENT",
+            "Visit Type": o.visit_type.value.replace("_", "-").upper() if o.visit_type else "",
+            "Order Taken From": _map_link(None, o.order_lat, o.order_lng),
+            "Distance From Shop (m)": float(o.order_distance_m) if o.order_distance_m is not None else "",
             "Bill Number": o.bill_number or "",
             "Secondary Bill Number": o.secondary_bill_number or "",
             "Type": o.order_type.value,
@@ -1061,6 +1065,10 @@ async def get_order_archive_data(
     for o in orders:
         rows.append({
             "Order Number": o.order_number,
+            "Order Level": "CHILD" if o.parent_order_id else "PARENT",
+            "Visit Type": o.visit_type.value.replace("_", "-").upper() if o.visit_type else "",
+            "Order Taken From": _map_link(None, o.order_lat, o.order_lng),
+            "Distance From Shop (m)": float(o.order_distance_m) if o.order_distance_m is not None else "",
             "Bill Number": o.bill_number or "",
             "Secondary Bill Number": o.secondary_bill_number or "",
             "Date": fmt_ist(o.created_at, "%Y-%m-%d"),
