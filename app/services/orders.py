@@ -619,9 +619,14 @@ async def get_estimate_split_preview(db: AsyncSession, order: Order) -> dict:
 
     for item in order.items:
         if order.order_type == OrderType.individual:
-            available_now = await _get_available_individual(db, item.variant_id)
+            available_now = await _get_available_individual(db, item.variant_id)  # pieces
         else:
-            available_now = await _get_available_bundle(db, item.product_id, item.set_type_id)
+            # _get_available_bundle returns whole SETS; item.count is in PIECES, so convert
+            # to pieces (sets × set_qty). Bundle availability is therefore always a whole
+            # number of boxes — never a part-box.
+            available_sets = await _get_available_bundle(db, item.product_id, item.set_type_id)
+            set_qty = await _set_qty(db, item.set_type_id)
+            available_now = available_sets * set_qty  # pieces
 
         available_at_placement = available_now + item.count
         coverable = min(item.count, max(0, available_at_placement))
@@ -673,12 +678,35 @@ async def split_order(
                 detail=f"OrderItem {si.order_item_id} not found in order {order.order_number}"
             )
         if si.count <= 0:
-            raise AppException(status_code=400, detail="Split count must be greater than 0")
+            raise AppException(
+                status_code=400, detail="Split count must be greater than 0",
+                error_code="INVALID_COUNT",
+            )
         if si.count > parent_item.count:
             raise AppException(
                 status_code=400,
-                detail=f"Split count {si.count} exceeds item count {parent_item.count}"
+                detail=f"Split count {si.count} exceeds item count {parent_item.count}",
+                error_code="COUNT_EXCEEDS_LINE",
             )
+        # Bundle lines move in whole boxes only (1 box = set_qty pieces). Because the parent
+        # line is itself a whole number of boxes, a whole-box split keeps both the moved part
+        # and the remainder whole — matching order creation and the item-quantity edit rule.
+        if order.order_type == OrderType.bundle:
+            set_qty = await _set_qty(db, parent_item.set_type_id)
+            set_name = parent_item.set_type.name if parent_item.set_type else "this set"
+            if set_qty <= 0:
+                raise AppException(
+                    status_code=400, detail=f"Set size unknown for {set_name}",
+                    error_code="SET_SIZE_UNKNOWN",
+                )
+            if si.count % set_qty != 0:
+                raise AppException(
+                    status_code=400,
+                    detail=(f"Split count for {set_name} must be a whole number of boxes: a "
+                            f"multiple of {set_qty} pieces (1 box = {set_qty} pieces). "
+                            f"Got {si.count}."),
+                    error_code="NOT_WHOLE_BOX",
+                )
         validated.append({"parent_item": parent_item, "split_count": si.count})
 
     # Sanity guard: refuse to move EVERY line item — parent would be empty.
@@ -1003,7 +1031,24 @@ async def process_return(
                 detail=f"OrderItem {ri.order_item_id} not found in order"
             )
         if ri.count <= 0:
-            raise AppException(status_code=400, detail="Return count must be greater than 0")
+            raise AppException(
+                status_code=400, detail="Return count must be greater than 0",
+                error_code="INVALID_COUNT",
+            )
+
+        # Bundle lines return in whole boxes only — every stock-restore path floors
+        # pieces // set_qty, so a part-box return would silently lose the remainder.
+        if order.order_type == OrderType.bundle and order_item.set_type_id:
+            set_qty = await _set_qty(db, order_item.set_type_id)
+            set_name = order_item.set_type.name if order_item.set_type else "this set"
+            if set_qty > 0 and ri.count % set_qty != 0:
+                raise AppException(
+                    status_code=400,
+                    detail=(f"Return count for {set_name} must be a whole number of boxes: a "
+                            f"multiple of {set_qty} pieces (1 box = {set_qty} pieces). "
+                            f"Got {ri.count}."),
+                    error_code="NOT_WHOLE_BOX",
+                )
 
         already_returned = (await db.execute(
             select(func.coalesce(func.sum(OrderReturn.count), 0)).where(
@@ -1016,7 +1061,8 @@ async def process_return(
             raise AppException(
                 status_code=400,
                 detail=f"Total returned ({already_returned + ri.count}) exceeds "
-                       f"original count ({order_item.count}) for item {ri.order_item_id}"
+                       f"original count ({order_item.count}) for item {ri.order_item_id}",
+                error_code="RETURN_EXCEEDS_LINE",
             )
 
         await _restore_stock_by_return_type(db, order_item, ri.return_type, ri.count)
