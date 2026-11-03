@@ -844,6 +844,7 @@ async def get_order_report_data(
         .where(Order.is_deleted == False)
         .options(
             selectinload(Order.items).selectinload(OrderItem.product).selectinload(Product.category),
+            selectinload(Order.items).selectinload(OrderItem.product).selectinload(Product.model_ref),
             selectinload(Order.items).selectinload(OrderItem.set_type),
             selectinload(Order.items).selectinload(OrderItem.variant),
             selectinload(Order.shop).selectinload(Shop.district),
@@ -953,9 +954,9 @@ async def get_order_report_data(
 
         if not o.items:
             rows.append({**order_head, "SL": "", "Product": "", "Category": "",
-                         "Set Type": "", "Size": "", "Color": "", "Pieces": 0,
-                         "Unit Price": "", "Price Basis": price_label, "Line Total": 0,
-                         **order_tail})
+                         "Model": "", "Set Type": "", "Variant": "", "Size": "", "Color": "",
+                         "Pieces": 0, "Unit Price": "", "Price Basis": price_label,
+                         "Line Total": 0, **order_tail})
             continue
 
         for idx, item in enumerate(o.items, start=1):
@@ -964,21 +965,50 @@ async def get_order_report_data(
                 if item.product and item.product.category
                 else ""
             )
+            model = (
+                item.product.model_ref.name
+                if item.product and item.product.model_ref
+                else ""
+            )
+            size = item.variant.size if item.variant else ""
+            color = item.variant.color if item.variant else ""
+            variant = " / ".join(p for p in (size, color) if p)
             rows.append({
                 **order_head,
                 "SL": idx,
                 "Product": item.product.name if item.product else "?",
                 "Category": category,
+                "Model": model,
                 "Set Type": item.set_type.name if item.set_type else "",
-                "Size": item.variant.size if item.variant else "",
-                "Color": item.variant.color if item.variant else "",
+                "Variant": variant,
+                "Size": size,
+                "Color": color,
                 "Pieces": item.count or 0,
                 "Unit Price": float(item.unit_price or 0),
                 "Price Basis": price_label,
                 "Line Total": float(item.total_price or 0),
+                # Hidden (underscore) fields — not exposed as pivot dimensions; used by the
+                # size-exploded pivot source to split set lines across their sizes.
+                "_set_type_id": str(item.set_type_id) if item.set_type_id else None,
+                "_variant_size": size,
                 **order_tail,
             })
     return rows
+
+
+async def get_set_composition_map(db: AsyncSession) -> dict:
+    """{set_type_id (str): {"total": int, "sizes": [(size, quantity), ...]}} for every set type.
+
+    Used to explode a set sale (one line, N pieces) into one row per size, with pieces
+    distributed by the set's composition (e.g. BOX-8 with 24 pcs → 3 each of sizes 101..108).
+    """
+    result = await db.execute(select(SetType).options(selectinload(SetType.items)))
+    out: dict = {}
+    for st in result.scalars().unique().all():
+        sizes = [(si.size, si.quantity or 0) for si in st.items]
+        total = sum(q for _, q in sizes) or (st.total_pieces or 0)
+        out[str(st.id)] = {"total": total, "sizes": sizes}
+    return out
 
 
 async def get_order_archive_data(

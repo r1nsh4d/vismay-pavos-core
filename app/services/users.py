@@ -225,6 +225,43 @@ async def assign_tenants(db: AsyncSession, user: User, tenant_ids: List[uuid.UUI
     return await hydrate_user(db, user.id)
 
 
+async def set_tenants(db: AsyncSession, user: User, tenant_ids: List[uuid.UUID]) -> User:
+    """Replace a user's tenant set with exactly `tenant_ids` (the 'edit tenants' operation).
+
+    Adds tenants that are new, removes tenants no longer in the list, and reactivates any
+    kept tenant that was deactivated. Only active, existing tenants are assigned. An empty
+    list clears all tenant assignments.
+    """
+    desired = list(dict.fromkeys(tenant_ids))  # de-dupe, preserve order
+
+    # Validate the requested tenants exist and are active.
+    valid_ids: set = set()
+    if desired:
+        res = await db.execute(
+            select(Tenant.id).where(Tenant.id.in_(desired), Tenant.is_active == True)
+        )
+        valid_ids = set(res.scalars().all())
+
+    # Current assignments.
+    res = await db.execute(select(UserTenant).where(UserTenant.user_id == user.id))
+    current = {ut.tenant_id: ut for ut in res.scalars().all()}
+
+    # Remove assignments not in the desired (valid) set.
+    for tid, ut in current.items():
+        if tid not in valid_ids:
+            await db.delete(ut)
+
+    # Add new ones; reactivate kept ones.
+    for tid in valid_ids:
+        if tid in current:
+            current[tid].is_active = True
+        else:
+            db.add(UserTenant(user_id=user.id, tenant_id=tid))
+
+    await db.flush()
+    return await hydrate_user(db, user.id)
+
+
 async def remove_tenant(db: AsyncSession, user_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
     result = await db.execute(
         select(UserTenant).where(UserTenant.user_id == user_id, UserTenant.tenant_id == tenant_id)

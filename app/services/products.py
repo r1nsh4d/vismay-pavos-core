@@ -120,11 +120,59 @@ async def search_products(
 
 
 async def update_product(db: AsyncSession, product: Product, product_in: ProductUpdate) -> Product:
-    for field, value in product_in.model_dump(exclude_unset=True).items():
+    data = product_in.model_dump(exclude_unset=True)
+    variants_payload = data.pop("variants", None)  # handled separately (it's a relationship)
+
+    for field, value in data.items():
         setattr(product, field, value)
     await db.flush()
+
+    # Sync variants only when the caller included the field. `None` (field omitted) leaves
+    # variants untouched; an empty list removes all of them.
+    if variants_payload is not None:
+        await _sync_variants(db, product, variants_payload)
+
     result = await db.execute(_product_query().where(Product.id == product.id))
     return result.scalar_one()
+
+
+async def _sync_variants(db: AsyncSession, product: Product, variants_payload: list[dict]) -> None:
+    """Make the product's variants match `variants_payload` (list of dicts from the upsert
+    schema). Items with `id` update an existing variant, items without `id` create one, and
+    any current (non-deleted) variant absent from the list is soft-deleted. New variants get a
+    zeroed Stock row, mirroring create_product/add_variant.
+    """
+    current = {v.id: v for v in product.variants if not v.is_deleted}
+    seen: set = set()
+
+    for vp in variants_payload:
+        raw_id = vp.get("id")
+        fields = {k: val for k, val in vp.items() if k != "id"}
+
+        if raw_id:
+            try:
+                vid = raw_id if isinstance(raw_id, uuid.UUID) else uuid.UUID(str(raw_id))
+            except (ValueError, TypeError):
+                continue  # malformed id — skip rather than crash
+            variant = current.get(vid)
+            if not variant:
+                continue  # unknown or foreign variant id — ignore
+            seen.add(vid)
+            for f, val in fields.items():
+                setattr(variant, f, val)
+        else:
+            variant = ProductVariant(product_id=product.id, **fields)
+            db.add(variant)
+            await db.flush()
+            db.add(Stock(variant_id=variant.id, individual_count=0))
+
+    # Remove variants the caller dropped.
+    for vid, variant in current.items():
+        if vid not in seen:
+            await delete_variant_image(variant.image_url, variant.thumbnail_url)
+            variant.is_deleted = True
+
+    await db.flush()
 
 
 async def delete_product(db: AsyncSession, product: Product) -> None:
@@ -156,6 +204,45 @@ async def update_variant(
     for field, value in variant_in.model_dump(exclude_unset=True).items():
         setattr(variant, field, value)
 
+    await db.flush()
+    return variant
+
+
+async def toggle_variant_active(
+    db: AsyncSession, product_id: uuid.UUID, variant_id: uuid.UUID
+) -> Optional[ProductVariant]:
+    """Flip a single variant's active flag — inactivating a product for one size while the
+    rest of the product stays orderable."""
+    result = await db.execute(
+        select(ProductVariant).where(
+            ProductVariant.id == variant_id,
+            ProductVariant.product_id == product_id,
+            ProductVariant.is_deleted == False,
+        )
+    )
+    variant = result.scalar_one_or_none()
+    if not variant:
+        return None
+    variant.is_active = not variant.is_active
+    await db.flush()
+    return variant
+
+
+async def set_variant_active(
+    db: AsyncSession, product_id: uuid.UUID, variant_id: uuid.UUID, is_active: bool
+) -> Optional[ProductVariant]:
+    """Set a variant's active flag to an explicit value (idempotent set, not a flip)."""
+    result = await db.execute(
+        select(ProductVariant).where(
+            ProductVariant.id == variant_id,
+            ProductVariant.product_id == product_id,
+            ProductVariant.is_deleted == False,
+        )
+    )
+    variant = result.scalar_one_or_none()
+    if not variant:
+        return None
+    variant.is_active = is_active
     await db.flush()
     return variant
 

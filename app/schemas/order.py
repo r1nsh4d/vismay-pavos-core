@@ -104,6 +104,12 @@ class UpdateOrderItemInput(CamelModel):
     count: int
 
 
+class BulkOrderItemChange(CamelModel):
+    """One line's new count in a bulk item-quantity update."""
+    order_item_id: uuid.UUID
+    count: int
+
+
 # ── Split ──────────────────────────────────────────────────────────────────────
 
 class SplitItemInput(CamelModel):

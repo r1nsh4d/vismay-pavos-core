@@ -149,6 +149,21 @@ async def assign_tenants(user_id: uuid.UUID, tenant_ids: List[uuid.UUID], db: As
     return ResponseModel(data=user_mgmt.serialize_user(user), message="Tenants assigned successfully")
 
 
+@router.put("/{user_id}/tenants", response_model=CommonResponse)
+async def set_tenants(user_id: uuid.UUID, tenant_ids: List[uuid.UUID], db: AsyncSession = Depends(get_db)):
+    """Replace the user's tenants with exactly this list (the 'edit tenants' operation).
+
+    Body: a JSON array of tenant UUIDs, e.g. ["uuid-a", "uuid-b"]. Adds new ones, removes
+    dropped ones, reactivates kept ones. An empty array clears all tenants. Use this for the
+    edit dialog; use POST to only add without removing.
+    """
+    user = await user_mgmt.get_user_by_id(db, user_id)
+    if not user:
+        raise AppException(status_code=404, detail="User not found")
+    user = await user_mgmt.set_tenants(db, user, tenant_ids)
+    return ResponseModel(data=user_mgmt.serialize_user(user), message="Tenants updated successfully")
+
+
 @router.delete("/{user_id}/tenants/{tenant_id}", response_model=CommonResponse)
 async def remove_tenant(user_id: uuid.UUID, tenant_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     removed = await user_mgmt.remove_tenant(db, user_id, tenant_id)

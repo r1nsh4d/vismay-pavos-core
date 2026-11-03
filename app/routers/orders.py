@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, block_read_only_writes
 from app.routers.reports import pdf_response
 from app.schemas.common import CommonResponse, ResponseModel, ErrorResponseModel, PaginatedResponse
 from app.schemas.order import (
@@ -14,13 +14,21 @@ from app.schemas.order import (
     OrderAssignDistributorInput, OrderDispatchInput,
     SplitOrderInput, CreateOrderReturnInput,
     UpdateDeliveredAtInput, UpdateOrderItemInput, OrderBillUpdate,
+    BulkOrderItemChange,
 )
 from app.services import orders as order_svc
 from app.models.order import OrderStatus, OrderType, CANCELLABLE_STATUSES
 from app.models.user import User
 from app.services.report_export import build_sales_order_pdf
 
-router = APIRouter(prefix="/orders", tags=["Orders"])
+router = APIRouter(prefix="/orders", tags=["Orders"], dependencies=[Depends(block_read_only_writes)])
+
+# Statuses at which an order's item quantities may still be changed (every stage before
+# billing). Matches what /split allows.
+ITEM_EDIT_STATUSES = (
+    OrderStatus.placed, OrderStatus.verified,
+    OrderStatus.assigned, OrderStatus.approved, OrderStatus.estimated,
+)
 
 
 def _parse_statuses(val: str | None) -> List[OrderStatus] | None:
@@ -170,10 +178,7 @@ async def update_order_item(
     order = await order_svc.get_order_by_id(db, order_id)
     if not order:
         return ErrorResponseModel(code=404, message="Order not found", error={})
-    if order.status not in (
-        OrderStatus.placed, OrderStatus.verified,
-        OrderStatus.assigned, OrderStatus.approved, OrderStatus.estimated,
-    ):
+    if order.status not in ITEM_EDIT_STATUSES:
         return ErrorResponseModel(
             code=400, message="Items can only be edited before billing", error={}
         )
@@ -181,6 +186,34 @@ async def update_order_item(
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
     return ResponseModel(data=order_svc.serialize_order(order), message="Order item updated")
+
+
+@router.patch("/{order_id}/items", response_model=CommonResponse)
+async def update_order_items_bulk(
+    order_id: uuid.UUID,
+    changes: List[BulkOrderItemChange],
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Change several item quantities in one atomic call (all-or-nothing).
+
+    Body: a JSON array of `{ orderItemId, count }`. Every change is applied with its stock
+    adjustment, or none is — if any line fails (e.g. not enough stock) nothing is committed
+    and the error says which item failed. Returns the full updated order, same shape as
+    GET /orders/{id}. Allowed only before billing (same statuses as the single-item edit)."""
+    order = await order_svc.get_order_by_id(db, order_id)
+    if not order:
+        return ErrorResponseModel(code=404, message="Order not found", error={})
+    if order.status not in ITEM_EDIT_STATUSES:
+        return ErrorResponseModel(
+            code=400, message="Items can only be edited before billing", error={}
+        )
+    order = await order_svc.update_order_items_bulk(
+        db, order, [(c.order_item_id, c.count) for c in changes]
+    )
+    await db.commit()
+    order = await order_svc.get_order_by_id(db, order.id)
+    return ResponseModel(data=order_svc.serialize_order(order), message="Order items updated")
 
 
 # ── Estimate & Split ───────────────────────────────────────────────────────────
@@ -406,8 +439,15 @@ async def apply_discount(
     order = await order_svc.get_order_by_id(db, order_id)
     if not order:
         return ErrorResponseModel(code=404, message="Order not found", error={})
-    if order.status != OrderStatus.billed:
-        return ErrorResponseModel(code=400, message="Discounts only on billed orders", error={})
+    # Discount can be set from the start (before verification) so it shows in the order form.
+    # It's only disallowed once the order is cancelled/rejected/returned.
+    if order.status in (
+        OrderStatus.cancelled, OrderStatus.rejected,
+        OrderStatus.returned, OrderStatus.partially_returned,
+    ):
+        return ErrorResponseModel(
+            code=400, message="Discounts can't be applied to cancelled, rejected or returned orders", error={}
+        )
     order = await order_svc.apply_discount(
         db, order,
         discount_percent=discount_in.discount_percent,
@@ -571,9 +611,16 @@ async def delete_order(
     order = await order_svc.get_order_by_id(db, order_id)
     if not order:
         return ErrorResponseModel(code=404, message="Order not found", error={})
-    if order.status not in (OrderStatus.placed, OrderStatus.rejected, OrderStatus.cancelled):
+    # Superadmin can delete an order at any stage; everyone else is limited to orders that
+    # haven't moved into fulfilment (placed/rejected/cancelled).
+    is_super = bool(current_user.role and current_user.role.name == "super_admin")
+    if not is_super and order.status not in (
+        OrderStatus.placed, OrderStatus.rejected, OrderStatus.cancelled
+    ):
         return ErrorResponseModel(
-            code=400, message="Only placed, rejected or cancelled orders can be deleted", error={}
+            code=400,
+            message="Only placed, rejected or cancelled orders can be deleted (superadmin can delete any)",
+            error={},
         )
     await order_svc.soft_delete_order(db, order)
     await db.commit()

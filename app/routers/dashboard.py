@@ -328,3 +328,79 @@ async def kpi_shops_excel(
         "Last Order": (r["lastOrderDate"][:10] if r["lastOrderDate"] else ""),
     } for r in rows]
     return excel_response(generate_excel(flat, "Shop KPIs"), f"shop_kpis_{_now_str()}")
+
+
+# ── BI analysis tab — Excel downloads (breakdown / trend / compare / top products) ──
+
+@router.get("/breakdown/excel")
+async def breakdown_excel(
+    by: str = Query(..., description="Group by: district | shop | tenant | category"),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tenant_id: uuid.UUID | None = None,
+    limit: int = 1000,
+    db: AsyncSession = Depends(get_db),
+):
+    """BI breakdown (sales by district/shop/tenant/category) as Excel."""
+    date_from, date_to = _default_range(date_from, date_to)
+    rows = await dash_svc.get_breakdown(db, by, date_from, date_to, tenant_id, limit)
+    flat = [{
+        by.title(): r["label"], "Orders": r["orders"],
+        "Value": r["value"], "Pieces": r["pieces"],
+    } for r in rows]
+    return excel_response(generate_excel(flat, f"Breakdown by {by}"), f"breakdown_{by}_{_now_str()}")
+
+
+@router.get("/trend/excel")
+async def trend_excel(
+    group: str = Query("day", description="Bucket by: day | week | month"),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tenant_id: uuid.UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """BI trend (orders + value over time) as Excel."""
+    date_from, date_to = _default_range(date_from, date_to)
+    rows = await dash_svc.get_trend(db, group, date_from, date_to, tenant_id)
+    flat = [{"Period": r["period"], "Orders": r["orders"], "Value": r["value"]} for r in rows]
+    return excel_response(generate_excel(flat, f"Trend by {group}"), f"trend_{group}_{_now_str()}")
+
+
+@router.get("/compare/excel")
+async def compare_excel(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tenant_id: uuid.UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """BI period comparison (current vs preceding range, with % change) as Excel."""
+    date_from, date_to = _default_range(date_from, date_to)
+    data = await dash_svc.get_period_comparison(db, date_from, date_to, tenant_id)
+    cur, prev, chg = data["current"], data["previous"], data["change"]
+    flat = [
+        {"Range": "Current", "From": cur["dateFrom"], "To": cur["dateTo"],
+         "Orders": cur["orders"], "Value": cur["value"], "Pieces": cur["pieces"]},
+        {"Range": "Previous", "From": prev["dateFrom"], "To": prev["dateTo"],
+         "Orders": prev["orders"], "Value": prev["value"], "Pieces": prev["pieces"]},
+        {"Range": "Change %", "From": "", "To": "",
+         "Orders": chg["ordersPct"], "Value": chg["valuePct"], "Pieces": chg["piecesPct"]},
+    ]
+    return excel_response(generate_excel(flat, "Period Comparison"), f"compare_{_now_str()}")
+
+
+@router.get("/top-products/excel")
+async def top_products_excel(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tenant_id: uuid.UUID | None = None,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+):
+    """BI top products (by order value, with pieces) as Excel."""
+    date_from, date_to = _default_range(date_from, date_to)
+    rows = await dash_svc.get_top_products(db, date_from, date_to, tenant_id, limit)
+    flat = [{
+        "Product": r["productName"], "Category": r["category"],
+        "Pieces": r["pieces"], "Value": r["value"],
+    } for r in rows]
+    return excel_response(generate_excel(flat, "Top Products"), f"top_products_{_now_str()}")

@@ -100,6 +100,7 @@ SYSTEM_ROLES = [
     {"name": "scm_user",    "description": "SCM access — same as admin but cannot manage admin users"},
     {"name": "distributor", "description": "Distributor access"},
     {"name": "executive",   "description": "Executive access"},
+    {"name": "viewer",      "description": "Read-only — view orders and product catalog only"},
 ]
 
 MODULES = [
@@ -176,6 +177,17 @@ EXECUTIVE_PERMISSIONS = {
     "reports:read",
 }
 
+# View-only user: can see orders + the product catalog + reports, nothing else. No writes,
+# no dashboard, no user/tenant management.
+VIEWER_PERMISSIONS = {
+    "orders:read",
+    "products:read",
+    "categories:read",
+    "set_types:read",
+    "stocks:read",
+    "reports:read",
+}
+
 SUPER_ADMIN = {
     "username":   "superadmin",
     "first_name": "Super",
@@ -183,6 +195,16 @@ SUPER_ADMIN = {
     "email":      "superadmin@vismay.com",
     "phone":      "9999999999",
     "password":   "Admin@1234",
+}
+
+# Read-only guest account — change the password after first login.
+VIEWER_USER = {
+    "username":   "guest",
+    "first_name": "Guest",
+    "last_name":  "Viewer",
+    "email":      "guest@vismay.com",
+    "phone":      "9999900000",
+    "password":   "Guest@1234",
 }
 
 
@@ -347,6 +369,25 @@ async def run_seed(db: AsyncSession = Depends(get_db)):
         await db.flush()
         results["role_permissions_assigned"]["executive"] = assigned
 
+    # viewer → read-only (orders + product catalog)
+    viewer_role_id = role_map.get("viewer")
+    if viewer_role_id:
+        assigned = 0
+        for perm_code, perm_id in permission_map.items():
+            if perm_code not in VIEWER_PERMISSIONS:
+                continue
+            exists = await db.scalar(
+                select(RolePermission).where(
+                    RolePermission.role_id == viewer_role_id,
+                    RolePermission.permission_id == perm_id,
+                )
+            )
+            if not exists:
+                db.add(RolePermission(role_id=viewer_role_id, permission_id=perm_id))
+                assigned += 1
+        await db.flush()
+        results["role_permissions_assigned"]["viewer"] = assigned
+
     # Step 8: Seed super admin user
     exists = await db.scalar(select(User).where(User.email == SUPER_ADMIN["email"]))
     if not exists:
@@ -374,6 +415,30 @@ async def run_seed(db: AsyncSession = Depends(get_db)):
         results["super_admin_tenants"] = [t.code for t in all_tenants]
     else:
         results["super_admin"] = "already exists"
+
+    # Step 9: Seed the read-only guest/viewer user (all tenants, read-only role)
+    exists = await db.scalar(select(User).where(User.email == VIEWER_USER["email"]))
+    if not exists and viewer_role_id:
+        guest = User(
+            role_id=viewer_role_id,
+            username=VIEWER_USER["username"],
+            first_name=VIEWER_USER["first_name"],
+            last_name=VIEWER_USER["last_name"],
+            email=VIEWER_USER["email"],
+            phone=VIEWER_USER["phone"],
+            password_hash=AuthMgmt.get_password_hash(VIEWER_USER["password"]),
+            is_active=True,
+            is_verified=True,
+        )
+        db.add(guest)
+        await db.flush()
+        all_tenants = (await db.execute(select(Tenant))).scalars().all()
+        for tenant in all_tenants:
+            db.add(UserTenant(user_id=guest.id, tenant_id=tenant.id, is_active=True))
+        await db.flush()
+        results["viewer_user"] = VIEWER_USER["email"]
+    else:
+        results["viewer_user"] = "already exists" if exists else "viewer role missing"
 
     await db.commit()
 

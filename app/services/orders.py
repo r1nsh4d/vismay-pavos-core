@@ -501,6 +501,69 @@ async def create_individual_order(
 
 # ── Edit item at pre-bill stage ────────────────────────────────────────────────
 
+async def _change_item_count(db: AsyncSession, order: Order, item: OrderItem, new_count: int) -> None:
+    """Change a single line's count and adjust stock by the difference (no commit, no totals).
+
+    Units: `count` is in PIECES for both order types. For a bundle item it must be a whole
+    multiple of the set size (1 box = set_qty pieces), matching how bundle orders are created.
+    Stock is only touched when the order already has its stock deducted (`stock_deducted`).
+    An increase is checked against available stock and rejected (409) if short — nothing is
+    changed. Raises AppException on any invalid input, which rolls back the whole request.
+    """
+    if new_count is None or new_count <= 0:
+        raise AppException(
+            status_code=400,
+            detail="Count must be at least 1. To remove a line, cancel or split the order instead.",
+            error_code="INVALID_COUNT",
+        )
+
+    diff = new_count - item.count
+    if diff == 0:
+        return
+
+    set_name = item.set_type.name if item.set_type else "this set"
+
+    if order.order_type == OrderType.bundle:
+        set_qty = await _set_qty(db, item.set_type_id)
+        if set_qty <= 0:
+            raise AppException(status_code=400, detail=f"Set size unknown for {set_name}", error_code="SET_SIZE_UNKNOWN")
+        if new_count % set_qty != 0:
+            raise AppException(
+                status_code=400,
+                detail=(f"Count for {set_name} must be a whole number of boxes: a multiple of "
+                        f"{set_qty} pieces (1 box = {set_qty} pieces). Got {new_count}."),
+                error_code="NOT_WHOLE_BOX",
+            )
+        if order.stock_deducted and diff > 0:
+            available_sets = await _get_available_bundle(db, item.product_id, item.set_type_id)
+            sets_needed = diff // set_qty
+            if available_sets < sets_needed:
+                raise AppException(
+                    status_code=409,
+                    detail=(f"Only {available_sets} boxes ({available_sets * set_qty} pieces) of "
+                            f"{set_name} available, cannot increase by {sets_needed} boxes."),
+                    error_code="INSUFFICIENT_STOCK",
+                )
+    else:  # individual — count and stock are both in units
+        if order.stock_deducted and diff > 0:
+            available = await _get_available_individual(db, item.variant_id)
+            if available < diff:
+                raise AppException(
+                    status_code=409,
+                    detail=f"Only {available} units available, cannot increase by {diff}.",
+                    error_code="INSUFFICIENT_STOCK",
+                )
+
+    if order.stock_deducted:
+        if diff > 0:
+            await _deduct_stock_for_item(db, item, order.order_type, diff)
+        else:
+            await _restore_stock_for_item(db, item, order.order_type, abs(diff))
+
+    item.count = new_count
+    item.total_price = float(item.unit_price) * new_count
+
+
 async def update_order_item(
     db: AsyncSession,
     order: Order,
@@ -510,33 +573,39 @@ async def update_order_item(
     item = next((i for i in order.items if i.id == order_item_id), None)
     if not item:
         raise AppException(status_code=404, detail="Order item not found")
-    if new_count <= 0:
-        raise AppException(status_code=400, detail="Count must be greater than 0")
+    await _change_item_count(db, order, item, new_count)
+    _recalculate_totals(order)
+    await db.flush()
+    return await get_order_by_id(db, order.id)
 
-    old_count = item.count
-    diff = new_count - old_count
 
-    if diff > 0:
-        if order.order_type == OrderType.individual:
-            available = await _get_available_individual(db, item.variant_id)
-            if available < diff:
-                raise AppException(
-                    status_code=400,
-                    detail=f"Only {available} units available, cannot increase by {diff}"
-                )
-        else:
-            available = await _get_available_bundle(db, item.product_id, item.set_type_id)
-            if available < diff:
-                raise AppException(
-                    status_code=400,
-                    detail=f"Only {available} bundles available, cannot increase by {diff}"
-                )
-        await _deduct_stock_for_item(db, item, order.order_type, diff)
-    elif diff < 0:
-        await _restore_stock_for_item(db, item, order.order_type, abs(diff))
-
-    item.count = new_count
-    item.total_price = float(item.unit_price) * new_count
+async def update_order_items_bulk(
+    db: AsyncSession,
+    order: Order,
+    changes: list[tuple[uuid.UUID, int]],
+) -> Order:
+    """Apply several item-count changes atomically. Any failure raises and the request rolls
+    back, so it's all-or-nothing. `changes` is a list of (order_item_id, new_count)."""
+    if not changes:
+        raise AppException(status_code=400, detail="No item changes provided", error_code="EMPTY_BULK")
+    items_by_id = {i.id: i for i in order.items}
+    seen: set = set()
+    for item_id, new_count in changes:
+        if item_id in seen:
+            raise AppException(
+                status_code=400,
+                detail=f"Order item {item_id} listed more than once",
+                error_code="DUPLICATE_ITEM",
+            )
+        seen.add(item_id)
+        item = items_by_id.get(item_id)
+        if not item:
+            raise AppException(
+                status_code=404,
+                detail=f"Order item {item_id} not found in this order",
+                error_code="ITEM_NOT_FOUND",
+            )
+        await _change_item_count(db, order, item, new_count)
     _recalculate_totals(order)
     await db.flush()
     return await get_order_by_id(db, order.id)

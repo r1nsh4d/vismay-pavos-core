@@ -7,7 +7,7 @@ import io
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, restrict_read_only_to
 from app.core.timezone import IST
 from app.models.user import User
 from app.models.order import OrderStatus, OrderType
@@ -22,7 +22,11 @@ from app.services.report_export import generate_excel, generate_pdf
 from app.services import pivot as pivot_svc
 from app.schemas.common import CommonResponse, ResponseModel
 
-router = APIRouter(prefix="/reports", tags=["Reports"])
+# Read-only roles (viewer) may only reach the order report; all other report endpoints 403.
+router = APIRouter(
+    prefix="/reports", tags=["Reports"],
+    dependencies=[Depends(restrict_read_only_to("/reports/orders"))],
+)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

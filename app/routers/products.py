@@ -6,10 +6,10 @@ from app.models import SellType
 from app.schemas.common import CommonResponse, ResponseModel, ErrorResponseModel, PaginatedResponse
 from app.schemas.product import ProductCreate, ProductUpdate, ProductVariantCreate, ProductVariantResponse
 from app.services import products as product_svc
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, block_read_only_writes
 from app.models.user import User
 
-router = APIRouter(prefix="/products", tags=["Products"])
+router = APIRouter(prefix="/products", tags=["Products"], dependencies=[Depends(block_read_only_writes)])
 
 
 @router.get("/search", response_model=CommonResponse)
@@ -139,3 +139,24 @@ async def delete_variant(
         return ErrorResponseModel(code=404, message="Variant not found", error={})
     await db.commit()
     return ResponseModel(data=None, message="Variant deleted")
+
+
+@router.patch("/{product_id}/variants/{variant_id}/toggle", response_model=CommonResponse)
+async def toggle_variant(
+    product_id: uuid.UUID,
+    variant_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Inactivate/activate a single size: flips this variant's active flag. An inactive
+    variant stays in the catalog but can't be ordered, while the product's other sizes
+    remain available."""
+    variant = await product_svc.toggle_variant_active(db, product_id, variant_id)
+    if not variant:
+        return ErrorResponseModel(code=404, message="Variant not found", error={})
+    await db.commit()
+    state = "activated" if variant.is_active else "inactivated"
+    return ResponseModel(
+        data={"id": str(variant.id), "size": variant.size, "isActive": variant.is_active},
+        message=f"Variant {state}",
+    )

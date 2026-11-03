@@ -38,7 +38,8 @@ def generate_excel(rows: list[dict], sheet_name: str = "Report") -> bytes:
         wb.save(buf)
         return buf.getvalue()
 
-    headers = list(rows[0].keys())
+    # Keys prefixed with "_" are internal (e.g. ids used by downstream pivots) — never columns.
+    headers = [k for k in rows[0].keys() if not str(k).startswith("_")]
 
     header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
     header_font = Font(bold=True, color="FFFFFF", size=11)
@@ -162,7 +163,8 @@ def generate_excel(
         wb.save(buf)
         return buf.getvalue()
 
-    headers = list(rows[0].keys())
+    # Keys prefixed with "_" are internal (e.g. ids used by downstream pivots) — never columns.
+    headers = [k for k in rows[0].keys() if not str(k).startswith("_")]
 
     header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
     header_font = Font(bold=True, color="FFFFFF", size=11)
@@ -287,7 +289,7 @@ def generate_pdf(
         doc.build(elements)
         return buf.getvalue()
 
-    headers = list(rows[0].keys())
+    headers = [k for k in rows[0].keys() if not str(k).startswith("_")]
     page_width = landscape(A4)[0] - 2 * cm
 
     if col_weights:

@@ -23,7 +23,7 @@ _MEASURE_ONLY = {"sum", "avg", "min", "max"}          # value must be a measure
 _NEEDS_FIELD = {"sum", "avg", "min", "max", "count_distinct"}  # value must name a field
 DATE_GRAINS = ["day", "week", "month", "quarter", "year"]
 
-LIMITS = {"maxRowFields": 3, "maxColFields": 2, "maxValues": 4, "maxCells": 50000}
+LIMITS = {"maxRowFields": 10, "maxColFields": 10, "maxValues": 10, "maxCells": 200000}
 
 # ── Source registry ────────────────────────────────────────────────────────────
 PIVOT_SOURCES = {
@@ -31,7 +31,7 @@ PIVOT_SOURCES = {
         "label": "Orders (one row per order)",
         "statusField": "Status",
         "dimensions": [
-            "Order Level", "Visit Type", "Type", "Status", "Tenant",
+            "Order Level", "Visit Type", "Type", "Status",
             "Shop", "District", "Executive", "Distributor", "Date",
         ],
         "measures": ["Pieces", "Order Total"],
@@ -42,10 +42,27 @@ PIVOT_SOURCES = {
         "statusField": "Shipment Status",
         "dimensions": [
             "Order Level", "Visit Type", "Type", "Price Type", "Shipment Status",
-            "Tenant", "Shop", "District", "Taluk", "Executive", "Distributor",
-            "Category", "Set Type", "Size", "Color", "Product", "Booking Date",
+            "Shop", "District", "Taluk", "Executive", "Distributor",
+            "Category", "Model", "Product", "Set Type", "Variant", "Size", "Color",
+            "Booking Date",
         ],
         "measures": ["Pieces", "Unit Price", "Line Total"],
+        "dateDimensions": ["Booking Date"],
+    },
+    # Set sales store only the set + total pieces on the line (no per-size split). This source
+    # explodes each set line across its composition (e.g. BOX-8 × 24 pcs → 3 each of 101..108)
+    # so Size is populated for the ~99% of lines that are set/bundle sales. Pieces and Line Total
+    # are distributed proportionally; they reconcile to the line totals.
+    "order_items_by_size": {
+        "label": "Sales by size (set lines split across their sizes)",
+        "statusField": "Shipment Status",
+        "dimensions": [
+            "Order Level", "Visit Type", "Type", "Price Type", "Shipment Status",
+            "Shop", "District", "Taluk", "Executive", "Distributor",
+            "Category", "Model", "Product", "Set Type", "Size",
+            "Booking Date",
+        ],
+        "measures": ["Pieces", "Line Total"],
         "dateDimensions": ["Booking Date"],
     },
 }
@@ -106,6 +123,10 @@ async def _load_rows(db: AsyncSession, source: str, filters: dict) -> list[dict]
         rows = await rd.get_order_archive_data(db, **_order_kwargs(filters))
     elif source == "order_items":
         rows = await rd.get_order_report_data(db, **_order_kwargs(filters))
+    elif source == "order_items_by_size":
+        rows = await rd.get_order_report_data(db, **_order_kwargs(filters))
+        comp = await rd.get_set_composition_map(db)
+        rows = _explode_by_size(rows, comp)
     else:
         raise AppException(status_code=400, detail=f"Unknown pivot source '{source}'")
 
@@ -116,6 +137,43 @@ async def _load_rows(db: AsyncSession, source: str, filters: dict) -> list[dict]
         wanted = {s.value if hasattr(s, "value") else str(s) for s in statuses}
         rows = [r for r in rows if str(r.get(field, "")) in wanted]
     return rows
+
+
+def _explode_by_size(rows: list[dict], comp: dict) -> list[dict]:
+    """Split each order line into one row per size.
+
+    - Variant line (has a real size already): kept as one row.
+    - Set line (set_type with a known composition): emitted once per size in the set, with
+      Pieces and Line Total distributed by each size's share of the set (share = qty / total).
+      This reconciles: the per-size pieces/amounts sum back to the original line.
+    - Anything else (no variant size, unknown set): kept as a single "(blank)" row so totals
+      still reconcile.
+    """
+    out: list[dict] = []
+    for r in rows:
+        variant_size = (r.get("_variant_size") or "").strip()
+        set_id = r.get("_set_type_id")
+        spec = comp.get(set_id) if set_id else None
+
+        if variant_size:
+            out.append({**r, "Size": variant_size})
+            continue
+        if not spec or not spec["sizes"] or spec["total"] <= 0:
+            out.append({**r, "Size": r.get("Size") or ""})
+            continue
+
+        pieces = r.get("Pieces") or 0
+        line_total = r.get("Line Total") or 0
+        total = spec["total"]
+        for size, qty in spec["sizes"]:
+            share = qty / total
+            out.append({
+                **r,
+                "Size": size,
+                "Pieces": round(pieces * share, 2),
+                "Line Total": round(float(line_total) * share, 2),
+            })
+    return out
 
 
 # ── Value specs ──────────────────────────────────────────────────────────────────
@@ -326,6 +384,7 @@ def to_excel_rows(result: dict, include_totals: bool = True) -> list[dict]:
     values = result["values"]
     columns = result["columns"]
     has_cols = bool(result["colFields"])
+    single = len(values) == 1   # with one value, headers are just the column labels
 
     # Build the ordered list of output column headers.
     headers: list[str] = list(row_fields)
@@ -334,12 +393,15 @@ def to_excel_rows(result: dict, include_totals: bool = True) -> list[dict]:
         for ci, col in enumerate(columns):
             clabel = " / ".join(str(x) for x in col["label"])
             for vi, v in enumerate(values):
-                h = f"{clabel} | {v['label']}"
+                h = clabel if single else f"{clabel} | {v['label']}"
                 col_value_headers.append((ci, vi, h))
                 headers.append(h)
     total_headers: list[tuple] = []       # (value_index, header)
     for vi, v in enumerate(values):
-        h = (f"Total | {v['label']}") if has_cols else v["label"]
+        if has_cols:
+            h = "Total" if single else f"Total | {v['label']}"
+        else:
+            h = v["label"]
         total_headers.append((vi, h))
         if include_totals or not has_cols:
             headers.append(h)
