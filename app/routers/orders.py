@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_current_user, block_read_only_writes
+from app.dependencies import get_current_user, block_read_only_writes, require_roles
 from app.routers.reports import pdf_response
 from app.schemas.common import CommonResponse, ResponseModel, ErrorResponseModel, PaginatedResponse
 from app.schemas.order import (
@@ -14,7 +14,7 @@ from app.schemas.order import (
     OrderAssignDistributorInput, OrderDispatchInput,
     SplitOrderInput, CreateOrderReturnInput,
     UpdateDeliveredAtInput, UpdateOrderItemInput, OrderBillUpdate,
-    BulkOrderItemChange,
+    BulkOrderItemChange, OrderPriceTypeUpdate,
 )
 from app.services import orders as order_svc
 from app.models.order import OrderStatus, OrderType, CANCELLABLE_STATUSES
@@ -173,7 +173,7 @@ async def update_order_item(
     order_item_id: uuid.UUID,
     item_in: UpdateOrderItemInput,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles("super_admin")),
 ):
     order = await order_svc.get_order_by_id(db, order_id)
     if not order:
@@ -193,7 +193,7 @@ async def update_order_items_bulk(
     order_id: uuid.UUID,
     changes: List[BulkOrderItemChange],
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles("super_admin")),
 ):
     """Change several item quantities in one atomic call (all-or-nothing).
 
@@ -214,6 +214,29 @@ async def update_order_items_bulk(
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
     return ResponseModel(data=order_svc.serialize_order(order), message="Order items updated")
+
+
+@router.patch("/{order_id}/price-type", response_model=CommonResponse)
+async def update_order_price_type(
+    order_id: uuid.UUID,
+    body: OrderPriceTypeUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles("super_admin")),
+):
+    """Change an order's price type (MRP ↔ DP). Re-prices every line from its product and
+    recomputes subtotal / discount / total; item counts are unchanged. Allowed only before
+    billing. super_admin only. Returns the full updated order, same shape as GET /orders/{id}."""
+    order = await order_svc.get_order_by_id(db, order_id)
+    if not order:
+        return ErrorResponseModel(code=404, message="Order not found", error={})
+    if order.status not in ITEM_EDIT_STATUSES:
+        return ErrorResponseModel(
+            code=400, message="Price type can only be changed before billing", error={}
+        )
+    order = await order_svc.update_order_price_type(db, order, body.price_type, notes=body.notes)
+    await db.commit()
+    order = await order_svc.get_order_by_id(db, order.id)
+    return ResponseModel(data=order_svc.serialize_order(order), message="Order price type updated")
 
 
 # ── Estimate & Split ───────────────────────────────────────────────────────────

@@ -611,6 +611,29 @@ async def update_order_items_bulk(
     return await get_order_by_id(db, order.id)
 
 
+async def update_order_price_type(
+    db: AsyncSession,
+    order: Order,
+    new_price_type: PriceType,
+    notes: Optional[str] = None,
+) -> Order:
+    """Switch an order between MRP and DP pricing. Re-prices every line from its product at
+    the new price type, then recomputes subtotal / discount / total. Any existing discount
+    (percent or flat) is preserved and re-applied against the new subtotal. Counts are not
+    touched, so no stock moves. Caller enforces the before-billing + role guards."""
+    order.price_type = new_price_type
+    for item in order.items:
+        if item.product is None:
+            continue  # defensive: product is eager-loaded, but never divide the order over a gap
+        item.unit_price = _get_unit_price(item.product, new_price_type)
+        item.total_price = float(item.unit_price) * item.count
+    if notes:
+        order.notes = notes
+    _recalculate_totals(order)
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
 # ── Estimate split preview ─────────────────────────────────────────────────────
 
 async def get_estimate_split_preview(db: AsyncSession, order: Order) -> dict:

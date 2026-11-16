@@ -104,6 +104,12 @@ class UpdateOrderItemInput(CamelModel):
     count: int
 
 
+class OrderPriceTypeUpdate(CamelModel):
+    """Change an order's pricing basis (MRP ↔ DP). Re-prices every line and recomputes totals."""
+    price_type: PriceType
+    notes: Optional[str] = None
+
+
 class BulkOrderItemChange(CamelModel):
     """One line's new count in a bulk item-quantity update."""
     order_item_id: uuid.UUID
