@@ -11,6 +11,7 @@ from app.models.category import Category
 from app.models.product_model import ProductModel
 from app.models.set_type import SetType, SetTypeItem
 from app.models.product import Product, ProductVariant, SellType
+from app.models.product_set_type_visibility import ProductSetTypeVisibility
 from app.models.stock import Stock, BundleStock
 from app.models.order import Order, OrderItem, OrderStatus, OrderType
 from app.models.target import ExecutiveTarget, TargetType       # ← new
@@ -40,6 +41,7 @@ __all__ = [
     "Product",
     "ProductVariant",
     "SellType",
+    "ProductSetTypeVisibility",
     "Stock",
     "BundleStock",
     "Order",

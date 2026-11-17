@@ -66,6 +66,11 @@ class ProductUpdate(CamelModel):
     variants: Optional[List[ProductVariantUpsert]] = None
 
 
+class SetTypeVisibilityUpdate(CamelModel):
+    """Hide or show one set type for a single product (catalog display only)."""
+    hidden: bool
+
+
 class ProductResponse(CamelModel):
     id: uuid.UUID
     tenant_id: uuid.UUID

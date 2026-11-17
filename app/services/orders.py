@@ -634,6 +634,170 @@ async def update_order_price_type(
     return await get_order_by_id(db, order.id)
 
 
+# ── Full pre-verified edit ──────────────────────────────────────────────────────
+
+async def _add_order_line(db: AsyncSession, order: Order, inp) -> None:
+    """Add a brand-new line to an existing (stock-deducted) order, deducting stock.
+
+    The line must match the order's type: bundle lines need `set_type_id` and `count` in BOXES;
+    individual lines need `variant_id` and `count` in pieces. Availability is checked and a 409
+    is raised (rolling back the whole edit) if stock is short.
+    """
+    if not inp.product_id:
+        raise AppException(status_code=400, detail="productId is required to add a new line", error_code="MISSING_PRODUCT")
+    if inp.count is None or inp.count <= 0:
+        raise AppException(status_code=400, detail="A new line needs a count of at least 1", error_code="INVALID_COUNT")
+
+    product = await db.scalar(select(Product).where(Product.id == inp.product_id))
+    if not product:
+        raise AppException(status_code=404, detail=f"Product {inp.product_id} not found")
+
+    unit_price = _get_unit_price(product, order.price_type)
+
+    if order.order_type == OrderType.bundle:
+        if not inp.set_type_id:
+            raise AppException(status_code=400, detail="setTypeId is required to add a bundle line", error_code="MISSING_SET_TYPE")
+        set_type = await db.scalar(select(SetType).where(SetType.id == inp.set_type_id))
+        if not set_type:
+            raise AppException(status_code=404, detail=f"SetType {inp.set_type_id} not found")
+        set_qty = int(set_type.total_pieces or 0)
+        if set_qty <= 0:
+            raise AppException(status_code=400, detail=f"Set size unknown for {set_type.name}", error_code="SET_SIZE_UNKNOWN")
+        boxes = inp.count
+        pieces = boxes * set_qty
+        if order.stock_deducted:
+            available_sets = await _get_available_bundle(db, inp.product_id, inp.set_type_id)
+            if available_sets < boxes:
+                raise AppException(
+                    status_code=409,
+                    detail=(f"Only {available_sets} boxes ({available_sets * set_qty} pieces) of "
+                            f"{set_type.name} available, cannot add {boxes} boxes."),
+                    error_code="INSUFFICIENT_STOCK",
+                )
+        oi = OrderItem(
+            order_id=order.id,
+            product_id=inp.product_id,
+            set_type_id=inp.set_type_id,
+            variant_id=None,
+            count=pieces,
+            unit_price=unit_price,
+            total_price=unit_price * pieces,
+        )
+        db.add(oi)
+        await db.flush()
+        if order.stock_deducted:
+            await _deduct_stock_for_item(db, oi, OrderType.bundle, pieces)
+    else:  # individual
+        if not inp.variant_id:
+            raise AppException(status_code=400, detail="variantId is required to add an individual line", error_code="MISSING_VARIANT")
+        variant = await db.scalar(
+            select(ProductVariant).where(
+                ProductVariant.id == inp.variant_id,
+                ProductVariant.product_id == inp.product_id,
+            )
+        )
+        if not variant:
+            raise AppException(
+                status_code=404,
+                detail=f"Variant {inp.variant_id} not found for product {inp.product_id}",
+            )
+        if order.stock_deducted:
+            available = await _get_available_individual(db, inp.variant_id)
+            if available < inp.count:
+                raise AppException(
+                    status_code=409,
+                    detail=f"Only {available} units available, cannot add {inp.count}.",
+                    error_code="INSUFFICIENT_STOCK",
+                )
+        oi = OrderItem(
+            order_id=order.id,
+            product_id=inp.product_id,
+            variant_id=inp.variant_id,
+            set_type_id=None,
+            count=inp.count,
+            unit_price=unit_price,
+            total_price=unit_price * inp.count,
+        )
+        db.add(oi)
+        await db.flush()
+        if order.stock_deducted:
+            await _deduct_stock_for_item(db, oi, OrderType.individual, inp.count)
+
+
+async def full_edit_order(db: AsyncSession, order: Order, data) -> Order:
+    """Fully edit a pre-verified order in one call: price type, discount, notes, and the line
+    items (change counts, add lines, remove lines). Stock is moved for every count change /
+    add / remove; the bundle whole-box rule still holds. Totals are recomputed at the end.
+
+    Caller enforces the guards (super_admin + status == placed). Any failure raises and the
+    whole edit rolls back — it is all-or-nothing.
+    """
+    # 1. Price type — re-price every existing line before counts change.
+    if data.price_type is not None and data.price_type != order.price_type:
+        order.price_type = data.price_type
+        for item in order.items:
+            if item.product is not None:
+                item.unit_price = _get_unit_price(item.product, data.price_type)
+                item.total_price = float(item.unit_price) * item.count
+
+    # 2. Discount + notes.
+    if data.discount_percent is not None:
+        if data.discount_percent < 0:
+            raise AppException(status_code=400, detail="discountPercent cannot be negative", error_code="INVALID_DISCOUNT")
+        order.discount_percent = data.discount_percent
+    if data.discount_flat is not None:
+        if data.discount_flat < 0:
+            raise AppException(status_code=400, detail="discountFlat cannot be negative", error_code="INVALID_DISCOUNT")
+        order.discount_flat = data.discount_flat
+    if data.notes is not None:
+        order.notes = data.notes
+
+    # 3. Line items — update / remove / add.
+    if data.items:
+        items_by_id = {i.id: i for i in order.items}
+        for inp in data.items:
+            if inp.order_item_id:
+                item = items_by_id.get(inp.order_item_id)
+                if not item:
+                    raise AppException(
+                        status_code=404,
+                        detail=f"Order item {inp.order_item_id} not found in this order",
+                        error_code="ITEM_NOT_FOUND",
+                    )
+                if inp.count == 0:
+                    # Remove the line — restore the stock it was holding, then delete it.
+                    if order.stock_deducted:
+                        await _restore_stock_for_item(db, item, order.order_type, item.count)
+                    await db.delete(item)
+                else:
+                    if order.order_type == OrderType.bundle:
+                        set_qty = await _set_qty(db, item.set_type_id)
+                        if set_qty <= 0:
+                            raise AppException(status_code=400, detail="Set size unknown for this line", error_code="SET_SIZE_UNKNOWN")
+                        new_pieces = inp.count * set_qty  # count is BOXES → pieces
+                    else:
+                        new_pieces = inp.count
+                    await _change_item_count(db, order, item, new_pieces)
+            else:
+                await _add_order_line(db, order, inp)
+
+    await db.flush()
+
+    # 4. Recompute totals over whatever lines remain; never leave an empty order.
+    remaining = (await db.execute(
+        select(OrderItem).where(OrderItem.order_id == order.id)
+    )).scalars().all()
+    if not remaining:
+        raise AppException(
+            status_code=400,
+            detail="An order must have at least one item. Cancel the order instead of removing every line.",
+            error_code="EMPTY_ORDER",
+        )
+    _recalculate_totals(order, items=remaining)
+    await db.flush()
+    return await get_order_by_id(db, order.id)
+
+
 # ── Estimate split preview ─────────────────────────────────────────────────────
 
 async def get_estimate_split_preview(db: AsyncSession, order: Order) -> dict:

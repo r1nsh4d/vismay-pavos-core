@@ -4,7 +4,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import SellType
 from app.schemas.common import CommonResponse, ResponseModel, ErrorResponseModel, PaginatedResponse
-from app.schemas.product import ProductCreate, ProductUpdate, ProductVariantCreate, ProductVariantResponse
+from app.schemas.product import (
+    ProductCreate, ProductUpdate, ProductVariantCreate, ProductVariantResponse,
+    SetTypeVisibilityUpdate,
+)
 from app.services import products as product_svc
 from app.dependencies import get_current_user, block_read_only_writes
 from app.models.user import User
@@ -75,6 +78,33 @@ async def update_product(
     await db.commit()
     product = await product_svc.get_product_by_id(db, product.id)
     return ResponseModel(data=product_svc.serialize_product(product), message="Product updated")
+
+
+@router.patch("/{product_id}/set-types/{set_type_id}/visibility", response_model=CommonResponse)
+async def set_product_set_type_visibility(
+    product_id: uuid.UUID,
+    set_type_id: uuid.UUID,
+    body: SetTypeVisibilityUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Hide or show one set type for THIS product only (catalog display flag).
+
+    Body: `{ "hidden": true }` to hide, `{ "hidden": false }` to show again. Hiding does not
+    affect other products that use the same set type, and it does NOT block order creation —
+    the app reads `isHidden` on each `bundleStockSummary` entry and hides the hidden ones.
+    Returns the full updated product, same shape as GET /products/{id}."""
+    product = await product_svc.get_product_by_id(db, product_id)
+    if not product:
+        return ErrorResponseModel(code=404, message="Product not found", error={})
+    await product_svc.set_set_type_visibility(db, product_id, set_type_id, body.hidden)
+    await db.commit()
+    product = await product_svc.get_product_by_id(db, product_id)
+    state = "hidden" if body.hidden else "shown"
+    return ResponseModel(
+        data=product_svc.serialize_product(product),
+        message=f"Set type {state} for this product",
+    )
 
 
 @router.post("/{product_id}/variants", response_model=CommonResponse)

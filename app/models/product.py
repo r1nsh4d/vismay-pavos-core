@@ -32,6 +32,10 @@ class Product(BaseModel):
     set_type = relationship("SetType", backref="products")
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
     model_ref = relationship("ProductModel", back_populates="products")
+    # Per-product set-type visibility flags (catalog-only hide; see ProductSetTypeVisibility).
+    set_type_visibility = relationship(
+        "ProductSetTypeVisibility", cascade="all, delete-orphan", backref="product"
+    )
 
 
 class ProductVariant(BaseModel):

@@ -6,6 +6,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models import SetType
 from app.models.product import Product, ProductVariant, SellType
+from app.models.product_set_type_visibility import ProductSetTypeVisibility
 from app.models.stock import Stock, BundleStock
 from app.schemas.product import ProductCreate, ProductUpdate, ProductVariantCreate
 from app.services.storage_service import delete_variant_image
@@ -14,6 +15,7 @@ from app.services.storage_service import delete_variant_image
 def _product_query():
     return select(Product).where(Product.is_deleted == False).options(
         selectinload(Product.model_ref),
+        selectinload(Product.set_type_visibility),
         selectinload(Product.variants)
             .selectinload(ProductVariant.stock)
             .selectinload(Stock.bundle_stocks)
@@ -302,7 +304,39 @@ def serialize_variant_with_stock(v: ProductVariant) -> dict:
     }
 
 
+async def set_set_type_visibility(
+    db: AsyncSession, product_id: uuid.UUID, set_type_id: uuid.UUID, hidden: bool
+) -> ProductSetTypeVisibility:
+    """Hide (hidden=True) or show (hidden=False) a single set type for one product only.
+
+    Upserts the per-product flag; other products using the same set type are untouched. This
+    is a catalog/display flag — it does not block order creation.
+    """
+    row = await db.scalar(
+        select(ProductSetTypeVisibility).where(
+            ProductSetTypeVisibility.product_id == product_id,
+            ProductSetTypeVisibility.set_type_id == set_type_id,
+        )
+    )
+    if row:
+        row.is_hidden = hidden
+        row.is_deleted = False
+    else:
+        row = ProductSetTypeVisibility(
+            product_id=product_id, set_type_id=set_type_id, is_hidden=hidden
+        )
+        db.add(row)
+    await db.flush()
+    return row
+
+
 def serialize_product(product: Product) -> dict:
+    # Per-product set-type hide flags: {set_type_id: is_hidden}
+    hidden_map = {
+        str(v.set_type_id): v.is_hidden
+        for v in (product.set_type_visibility or [])
+        if not v.is_deleted
+    }
     # Aggregate bundle stocks across all variants grouped by set_type
     set_type_map: dict = {}
     for v in product.variants:
@@ -325,6 +359,8 @@ def serialize_product(product: Product) -> dict:
                         "setTypeId": key,
                         "setTypeName": bs.set_type.name if bs.set_type else None,
                         "totalBundleCount": total_sets,
+                        # True → the app should hide this set type for THIS product only.
+                        "isHidden": hidden_map.get(key, False),
                     }
 
     return {

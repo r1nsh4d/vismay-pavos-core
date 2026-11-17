@@ -14,7 +14,7 @@ from app.schemas.order import (
     OrderAssignDistributorInput, OrderDispatchInput,
     SplitOrderInput, CreateOrderReturnInput,
     UpdateDeliveredAtInput, UpdateOrderItemInput, OrderBillUpdate,
-    BulkOrderItemChange, OrderPriceTypeUpdate,
+    BulkOrderItemChange, OrderPriceTypeUpdate, OrderFullEdit,
 )
 from app.services import orders as order_svc
 from app.models.order import OrderStatus, OrderType, CANCELLABLE_STATUSES
@@ -237,6 +237,35 @@ async def update_order_price_type(
     await db.commit()
     order = await order_svc.get_order_by_id(db, order.id)
     return ResponseModel(data=order_svc.serialize_order(order), message="Order price type updated")
+
+
+@router.patch("/{order_id}/edit", response_model=CommonResponse)
+async def full_edit_order(
+    order_id: uuid.UUID,
+    body: OrderFullEdit,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles("super_admin")),
+):
+    """Fully edit an order while it is still `placed` (before it is verified). super_admin only.
+
+    One call can change the price type, discount (percent/flat), notes, and the line items —
+    edit a line's count, remove a line (`count: 0`), or add a new line. Stock moves for every
+    count change / add / remove, the bundle whole-box rule is enforced, and subtotal / discount
+    / total are recomputed. All-or-nothing: if any part fails (e.g. not enough stock) nothing is
+    saved. Returns the full updated order, same shape as GET /orders/{id}."""
+    order = await order_svc.get_order_by_id(db, order_id)
+    if not order:
+        return ErrorResponseModel(code=404, message="Order not found", error={})
+    if order.status != OrderStatus.placed:
+        return ErrorResponseModel(
+            code=400,
+            message="An order can only be fully edited before it is verified (while its status is 'placed').",
+            error={},
+        )
+    order = await order_svc.full_edit_order(db, order, body)
+    await db.commit()
+    order = await order_svc.get_order_by_id(db, order.id)
+    return ResponseModel(data=order_svc.serialize_order(order), message="Order updated")
 
 
 # ── Estimate & Split ───────────────────────────────────────────────────────────

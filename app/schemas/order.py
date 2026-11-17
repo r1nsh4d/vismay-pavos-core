@@ -116,6 +116,39 @@ class BulkOrderItemChange(CamelModel):
     count: int
 
 
+class OrderEditItem(CamelModel):
+    """One line in a full order edit (see OrderFullEdit).
+
+    - Edit an existing line: send `orderItemId` and the new `count`.
+    - Remove an existing line: send `orderItemId` with `count = 0` (stock is restored).
+    - Add a new line: omit `orderItemId` and send `productId` plus `setTypeId` (bundle order)
+      or `variantId` (individual order).
+
+    `count` units match order creation — bundle: number of BOXES (sets); individual: pieces.
+    A new line must match the order's own type (you can't add an individual line to a bundle
+    order or vice-versa).
+    """
+    order_item_id: Optional[uuid.UUID] = None
+    product_id: Optional[uuid.UUID] = None
+    variant_id: Optional[uuid.UUID] = None
+    set_type_id: Optional[uuid.UUID] = None
+    count: int
+
+
+class OrderFullEdit(CamelModel):
+    """Full pre-verified order edit (super_admin only, order status must be `placed`).
+
+    Every field is optional; anything omitted is left unchanged. `items` is a PARTIAL list —
+    only the lines you send are touched, lines you don't mention stay as they are. Changing
+    counts / adding / removing lines moves warehouse stock accordingly; totals are recomputed.
+    """
+    price_type: Optional[PriceType] = None
+    discount_percent: Optional[float] = None
+    discount_flat: Optional[float] = None
+    notes: Optional[str] = None
+    items: Optional[List[OrderEditItem]] = None
+
+
 # ── Split ──────────────────────────────────────────────────────────────────────
 
 class SplitItemInput(CamelModel):
